@@ -1,114 +1,182 @@
-# Playzoid Server — Rust Drop-in Replacement Plan
+# Talo Replacement Server in Rust
 
 ## Overview
-This document outlines a plan to create a Rust-based server that is a drop-in replacement for the TaloDev Org services (godot, backend, frontend, hosting repositories). The goal is to match existing functionality (endpoints, data models, real-time behavior) while providing a foundation for future extensions such as subaccount chat under a main user account (appearing as distinct users).
+This document outlines a drop-in replacement server for the Talo game backend written in Rust. It aims to replicate the functionalities provided by Talo's TypeScript-based backend while making use of Rust's ecosystem for enhanced performance and reliability. The plan will also specify extensions for subaccount chat functionality under the main user account, appearing as distinct users.
 
-## Assumptions about TaloDev (based on public inspection)
-- The system provides REST/JSON APIs for CRUD operations on entities like users, servers, scenes, assets, etc.
-- Real-time updates may be delivered via WebSocket or polling (to be confirmed).
-- Authentication likely uses API keys or JWT tokens.
-- Data is stored in a relational database (PostgreSQL/MySQL) or a document store (MongoDB).
-- Frontend and Godot clients consume the same API endpoints.
+## Current Functionality
 
-## Proposed Rust Architecture
-- **Framework**: `actix-web` (mature, high-performance) or `warp`/`axum` if preferred.
-- **Async runtime**: `tokio` with `#[tokio::main]` or `async-std`.
-- **Database**: `sqlx` (compile-time checked SQL) for PostgreSQL, or `mongodb` driver if MongoDB is used.
-- **Authentication**: `jsonwebtoken` (JWT) + `bcrypt` for password hashing if applicable; API key middleware for service-to-service calls.
-- **Real-time**: `actix-web-actix-proto` or manual WebSocket via `actix-web` + `tokio-tungstenite` for bidirectional updates.
-- **Serialization**: `serde` + `serde_json`.
-- **Config**: `config` crate or `dotenvy` + custom structs.
-- **Logging**: `tracing` + `tracing-subscriber`.
-- **Testing**: `actix-web-http-test` + `sqlx::test` or `mockall`.
+Talo provides features like:
+- Player management (persistent data, groups, authentication)
+- Leaderboards
+- Game saves
+- Real-time game channels (WebSocket-based communication)
+- Game analytics
+- Player presence with custom statuses
+- Cloud game configuration
+- Feedback collection
 
-## Suggested Folder Layout
-```
-Playzoid-Server/
-├── Cargo.toml
-├── README.md
-├── .gitignore
-├── src/
-│   ├── main.rs
-│   ├── lib.rs        # if we want a library
-│   ├── api/
-│   │   ├── mod.rs
-│   │   ├── handlers/
-│   │   │   ├── users.rs
-│   │   │   ├── servers.rs
-│   │   │   ├── scenes.rs
-│   │   │   ├── assets.rs
-│   │   │   └── ...
-│   │   ├── middleware/
-│   │   │   ├── auth.rs
-│   │   │   ├── logging.rs
-│   │   │   └── rate_limit.rs
-│   │   ├── models/
-│   │   │   ├── user.rs
-│   │   │   ├── server.rs
-│   │   │   ├── scene.rs
-│   │   │   └── ...
-│   │   ├── routes.rs
-│   │   └── error.rs
-│   ├── db/
-│   │   ├── mod.rs
-│   │   ├── connection.rs
-│   │   └── migrations/
-│   ├── realtime/
-│   │   ├── mod.rs
-│   │   ├── websocket.rs
-│   │   └── publisher.rs
-│   ├── utils/
-│   │   └── helpers.rs
-│   └── config.rs
-├── migrations/
-│   └─ V1__init.sql
-├── tests/
-│   ├── api_test.rs
-│   └── db_test.rs
-├── benches/
-│   └── ...
-└── docs/
-    ├─ PLAN.md        # this file
-    └─ ARCHITECTURE.md
+## Target Architecture
+
+### Frameworks/Tools
+- **actix-web** (HTTP server framework)
+- **tokio** (async runtime)
+- **sqlx** (for database interaction with MySQL/PostgreSQL support)
+- **serde** (serialization/deserialization)
+- **jsonwebtoken** (JWT authentication middleware)
+- **tracing** (structured logging and tracing)
+- **redis-rs** (Redis client library for caching and session management)
+- **warp or Axum for APIs** (with OpenAPI/Swagger integration using `utoipa`)
+
+### Folder Layout
+```plaintext
+src
+├── api                 # HTTP API handlers and routes
+│   ├── players.rs      # Player management APIs
+│   ├── auth.rs         # Authentication/Authorization logic
+│   ├── leaderboard.rs  # Leaderboard APIs
+├── entities            # Database models
+│   ├── player.rs       # Player-related entities
+│   ├── stats.rs        # Game stats
+│   ├── savegame.rs     # Game save structure
+├── middleware          # Middlewares (JWT, rate limiting, etc.)
+├── services            # Business logic for specific actions (e.g., saving a leaderboard)
+├── sockets             # WebSocket communication for real-time channels
+└── main.rs             # Application entry point
+
+migrations/             # SQL migration files
+config/                 # Configuration files (e.g., Docker, .env templates)
 ```
 
-## API Contract Summary (to be filled from inspection)
-| Method | Endpoint | Description | Auth | Real-time counterpart |
-|--------|----------|-------------|------|-----------------------|
-| GET    | /users   | List users  | API key | WS: user list updates |
-| POST   | /users   | Create user | API key | WS: new user event    |
-| GET    | /users/:id | Get user   | API key | WS: user update       |
-| PATCH  | /users/:id | Update user| API key | WS: user update       |
-| DELETE | /users/:id | Delete user| API key | WS: user deleted      |
-| ...    | ...      | ...         | ...    | ...                   |
-
-## Subaccount Chat Extension (future)
-- Main account owns subagents (like Clawffice-Space agents).
-- Each subagent gets a distinct user ID under the main account for display and messaging.
-- Chat persistence: store messages in a `subagent_messages` table linked to main account.
-- WebSocket topic: `ws://server/subchat/{main_account_id}` broadcasts to all subagent connections under that main account.
-- Access control: middleware ensures a subagent can only speak as its own assigned user ID.
-
-## Build & Run
-```bash
-# Build
-cargo build --release
-
-# Run (dev)
-cargo run
-
-# Run (prod)
-./target/release/playzoid-server
+### Proposed Cargo Dependencies
+```toml
+[dependencies]
+actix-web = "4.0"
+tokio = { version = "1", features = [\"full\"] }
+sqlx = { version = \"0.5\", features = [\"mysql\", \"runtime-tokio-native-tls\"] }
+serde = { version = \"1.0\", features = [\"derive\"] }
+jsonwebtoken = \"8.3\"
+tracing = \"0.1\"
+redis = \"0.23\"
+utopia = \"1.0\" # (or customized OpenAPI crates for Swagger integration)
 ```
 
-## Next Steps
-1. Confirm actual TaloDev API endpoints by inspecting the public repos or running a local instance.
-2. Implement the CRUD endpoints and verify against existing clients.
-3. Add WebSocket support for real-time updates.
-4. Add authentication and rate limiting.
-5. Implement database migrations and connection pooling.
-6. Write integration tests.
-7. Once parity is reached, begin extending with subaccount chat under the main account.
+## API Contract Summary
 
----
-*Generated as initial plan for Playzoid-Server Rust drop-in replacement.*
+### Authentication
+#### POST `/auth/login`
+- Authenticate user and return JWT.
+- Headers: `Content-Type: application/json`
+- Body:
+  ```json
+  {
+    \"username\": \"sample_user\",
+    \"password\": \"secure_pass\"
+  }
+  ```
+- Response:
+  ```json
+  {
+    \"token\": \"<JWT-TOKEN>\",
+    \"expiry\": 3600
+  }
+  ```
+
+### Player Management
+#### GET `/players/{id}`
+- Retrieves player details by ID.
+- Response:
+  ```json
+  {
+    \"id\": \"player123\",
+    \"username\": \"sample_user\",
+    \"email\": \"user@example.com\",
+    \"status\": \"online\"
+  }
+  ```
+
+#### POST `/players`
+- Registers a new player.
+- Body:
+  ```json
+  {
+    \"username\": \"new_player\",
+    \"email\": \"new@example.com\",
+    \"password\": \"secure_pass\"
+  }
+  ```
+- Response:
+  ```json
+  {
+    \"id\": \"player124\",
+    \"status\": \"created\"
+  }
+  ```
+
+### Leaderboards
+#### GET `/leaderboards/{game_id}`
+- Retrieve leaderboard for a specific game.
+- Response:
+  ```json
+  [
+    { \"player\": \"player1\", \"score\": 1000 },
+    { \"player\": \"player2\", \"score\": 950 }
+  ]
+  ```
+
+### Real-Time Communication
+#### WebSocket `/ws`
+- Facilitates game channels for real-time communication between players.
+- Supports player presence updates, chat, and live game events.
+
+### Data Models
+#### Player
+```rust
+#[derive(Serialize, Deserialize, sqlx::FromRow)]
+pub struct Player {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub status: String, // e.g., online, offline
+}
+```
+
+## Subaccount Chat Extension
+### Concept
+Subaccounts for players appear as distinct users but are linked to a master account. Game channels will treat subaccounts as individual participants with a dedicated `parent_account` field for relationship tracing.
+
+### Extension Strategy
+- **Database**: Add `parent_account_id` to player schema.
+- **API**: Enhance `/players` and `/auth` to support subaccount creation/login.
+- **WebSocket**: Extend game channels to group messages by subaccount contexts.
+
+## Deployment
+The server will be containerized using Docker for ease of deployment, with examples included for both basic and HTTPS-enabled setups via Caddy or Nginx.
+
+### Example Docker Compose
+```yaml
+version: '3.8'
+services:
+  backend:
+    image: talo-backend-rust:latest
+    build: .
+    ports:
+      - \"80:80\"
+    environment:
+      DATABASE_URL: \"mysql://user:pass@db/talo\"
+      REDIS_URL: \"redis://cache\"
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: talo
+  cache:
+    image: redis:alpine
+```
+
+## Monitoring and Maintenance
+- **Structured Logging**: Use `tracing` for request/response tracing.
+- **Health Checks**: Provide `/healthz` HTTP and WebSocket pings for liveness.
+- **Migrations**: Use `sqlx-cli` to manage migrations (`sqlx migrate run`).
+
+## Conclusion
+This plan aims to implement a feature-complete Rust server based on Talo's architecture while extending functionality to introduce subaccount-based chat under a parent-user system.
