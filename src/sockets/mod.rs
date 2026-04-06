@@ -1,5 +1,7 @@
 //! WebSocket scaffold
 
+pub mod ws;
+
 pub fn init() {
-    // TODO: implement WebSocket server scaffold (actix-web ws or tokio-tungstenite)
+    // placeholder: module initialization if needed
 }
