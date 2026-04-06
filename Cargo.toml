@@ -12,5 +12,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 log = "0.4"
 env_logger = "0.10"
 actix = "0.13"
+chrono = { version = "0.4", features = ["serde", "alloc"] }
 
 [workspace]
