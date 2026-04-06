@@ -1,0 +1,472 @@
+# put-storage_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct put-storage_Body {
+    pub key: String,
+    pub value: String,
+}
+```
+
+
+# put_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct put_Body {
+    pub description: serde_json::Value,
+}
+```
+
+
+# reset-password_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct reset-password_Body {
+    pub description: serde_json::Value,
+}
+```
+
+
+# create_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct create_Body {
+    pub scopes: Vec<serde_json::Value>,
+}
+```
+
+
+# update_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update_Body {
+    pub scopes: Vec<serde_json::Value>,
+}
+```
+
+
+# checkout-session_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct checkout-session_Body {
+    pub pricingPlanId: i64,
+    pub pricingInterval: serde_json::Value,
+}
+```
+
+
+# confirm-plan_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct confirm-plan_Body {
+    pub prorationDate: i64,
+    pub pricingPlanId: i64,
+    pub pricingInterval: serde_json::Value,
+}
+```
+
+
+# create_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct create_Body {
+    pub entities: Vec<serde_json::Value>,
+}
+```
+
+
+# create_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct create_Body {
+    pub name: String,
+}
+```
+
+
+# update_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update_Body {
+    pub name: String,
+    pub props: serde_json::Value,
+    pub purgeDevPlayers: bool,
+    pub purgeLivePlayers: bool,
+    pub purgeDevPlayersRetention: i64,
+    pub purgeLivePlayersRetention: i64,
+    pub website: String,
+}
+```
+
+
+# create_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct create_Body {
+    pub name: String,
+    pub ownerAliasId: i64,
+    pub props: serde_json::Value,
+    pub autoCleanup: bool,
+    pub private: bool,
+    pub temporaryMembership: bool,
+}
+```
+
+
+# update_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update_Body {
+    pub name: String,
+    pub ownerAliasId: i64,
+    pub props: serde_json::Value,
+    pub autoCleanup: bool,
+    pub private: bool,
+    pub temporaryMembership: bool,
+}
+```
+
+
+# create-category_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct create-category_Body {
+    pub internalName: String,
+    pub name: String,
+    pub description: String,
+    pub anonymised: bool,
+}
+```
+
+
+# update-category_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update-category_Body {
+    pub name: String,
+    pub description: String,
+    pub anonymised: bool,
+}
+```
+
+
+# update-player-stat_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update-player-stat_Body {
+    pub newValue: i64,
+}
+```
+
+
+# update_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update_Body {
+    pub apiKey: String,
+    pub appId: i64,
+    pub syncLeaderboards: bool,
+    pub syncStats: bool,
+    pub clientId: String,
+    pub clientSecret: String,
+}
+```
+
+
+# create_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct create_Body {
+    pub email: serde_json::Value,
+    pub error: serde_json::Value,
+}
+```
+
+
+# create_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct create_Body {
+    pub internalName: String,
+    pub name: String,
+    pub error: serde_json::Value,
+}
+```
+
+
+# update-entry_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update-entry_Body {
+    pub hidden: bool,
+    pub newScore: i64,
+}
+```
+
+
+# update_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update_Body {
+    pub name: String,
+    pub error: serde_json::Value,
+}
+```
+
+
+# update_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct update_Body {
+    pub props: serde_json::Value,
+}
+```
+
+
+# toggle-pinned_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct toggle-pinned_Body {
+    pub pinned: bool,
+}
+```
+
+
+# 2fa-confirm_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct 2fa-confirm_Body {
+    pub code: String,
+}
+```
+
+
+# 2fa-disable_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct 2fa-disable_Body {
+    pub password: serde_json::Value,
+}
+```
+
+
+# 2fa-recovery-codes-create_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct 2fa-recovery-codes-create_Body {
+    pub password: serde_json::Value,
+}
+```
+
+
+# 2fa-recovery-codes-view_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct 2fa-recovery-codes-view_Body {
+    pub password: serde_json::Value,
+}
+```
+
+
+# change-password_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct change-password_Body {
+    pub currentPassword: serde_json::Value,
+    pub newPassword: serde_json::Value,
+}
+```
+
+
+# confirm-email_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct confirm-email_Body {
+    pub code: String,
+}
+```
+
+
+# delete_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct delete_Body {
+    pub sessionToken: serde_json::Value,
+}
+```
+
+
+# login_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct login_Body {
+    pub identifier: String,
+    pub password: String,
+}
+```
+
+
+# verify_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct verify_Body {
+    pub aliasId: i64,
+    pub code: String,
+}
+```
+
+
+# forgot-password_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct forgot-password_Body {
+    pub email: String,
+}
+```
+
+
+# login_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct login_Body {
+    pub email: String,
+    pub password: serde_json::Value,
+}
+```
+
+
+# reset-password_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct reset-password_Body {
+    pub password: serde_json::Value,
+    pub token: String,
+}
+```
+
+
+# use-recovery-code_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct use-recovery-code_Body {
+    pub userId: i64,
+    pub code: String,
+}
+```
+
+
+# verify-2fa_Body — generated from Zod schema
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct verify-2fa_Body {
+    pub code: String,
+    pub userId: i64,
+}
+```
