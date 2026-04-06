@@ -29,6 +29,5 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
 }
 
 pub async fn ws_index(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let resp = ws::start(WsConn {}, &r, stream);
-    resp
+    ws::start(WsConn {}, &r, stream)
 }
