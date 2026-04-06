@@ -2,4 +2,5 @@
 
 pub mod auth;
 pub mod players;
+pub mod socket_ticket;
 
