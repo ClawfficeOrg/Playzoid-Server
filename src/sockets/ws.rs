@@ -4,7 +4,9 @@ use actix_web_actors::ws;
 use serde_json::{json, Value};
 
 /// Actor handling a single WebSocket connection
-pub struct WsConn;
+pub struct WsConn {
+    pub alias_id: Option<i64>,
+}
 
 impl Actor for WsConn {
     type Context = ws::WebsocketContext<Self>;
@@ -93,5 +95,20 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
 }
 
 pub async fn ws_index(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    ws::start(WsConn {}, &r, stream)
+    // Extract ticket from query param: ?ticket=...
+    let query = r.query_string();
+    let ticket_opt = url::form_urlencoded::parse(query.as_bytes()).find(|(k, _)| k == "ticket").map(|(_, v)| v.into_owned());
+    if let Some(ticket) = ticket_opt {
+        if let Some(alias_id) = crate::sockets::tickets::verify_ticket(&ticket) {
+            // Optionally revoke after use: crate::sockets::tickets::revoke_ticket(&ticket);
+            return ws::start(WsConn { alias_id: Some(alias_id) }, &r, stream);
+        } else {
+            // return an error response by starting and immediately sending v1.error then closing
+            // but actix ws::start requires an actor; create actor with no alias and send error on connect
+            return ws::start(WsConn { alias_id: None }, &r, stream);
+        }
+    }
+
+    // No ticket provided
+    ws::start(WsConn { alias_id: None }, &r, stream)
 }
