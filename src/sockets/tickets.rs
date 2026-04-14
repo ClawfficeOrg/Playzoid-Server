@@ -6,6 +6,7 @@ use uuid::Uuid;
 // Simple in-memory ticket store for socket authentication
 static TICKETS: Lazy<Mutex<HashMap<String, i64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+#[allow(dead_code)]
 pub fn create_ticket(alias_id: i64) -> String {
     let ticket = Uuid::new_v4().to_string();
     let mut map = TICKETS.lock().unwrap();
@@ -18,6 +19,7 @@ pub fn verify_ticket(ticket: &str) -> Option<i64> {
     map.get(ticket).copied()
 }
 
+#[allow(dead_code)]
 pub fn revoke_ticket(ticket: &str) {
     let mut map = TICKETS.lock().unwrap();
     map.remove(ticket);

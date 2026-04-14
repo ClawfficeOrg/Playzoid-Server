@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 /// Actor handling a single WebSocket connection
 pub struct WsConn {
+    #[allow(dead_code)]
     pub alias_id: Option<i64>,
 }
 

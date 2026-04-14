@@ -1,6 +1,7 @@
 //! WebSocket scaffold
 
 pub mod ws;
+pub mod tickets;
 
 #[allow(dead_code)]
 pub fn init() {
