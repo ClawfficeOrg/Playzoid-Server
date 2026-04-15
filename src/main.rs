@@ -12,6 +12,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .configure(api::auth::config)
             .configure(api::players::config)
+            .configure(api::socket_ticket::config)
             .route("/ws", web::get().to(sockets::ws::ws_index))
     })
     .bind(bind)?
