@@ -10,6 +10,7 @@ async fn main() -> std::io::Result<()> {
     println!("Starting server on {}", bind);
     HttpServer::new(|| {
         App::new()
+            .configure(api::healthz::config)
             .configure(api::auth::config)
             .configure(api::players::config)
             .configure(api::socket_ticket::config)
