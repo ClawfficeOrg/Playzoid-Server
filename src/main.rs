@@ -1,15 +1,24 @@
 use actix_web::{web, App, HttpServer};
+use tracing::info;
+use tracing_actix_web::TracingLogger;
 
 mod api;
 mod sockets;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let bind = "127.0.0.1:8080";
-    println!("Starting server on {}", bind);
+    info!("Starting Playzoid server on {}", bind);
     HttpServer::new(|| {
         App::new()
+            .wrap(TracingLogger::default())
             .configure(api::healthz::config)
             .configure(api::auth::config)
             .configure(api::players::config)
