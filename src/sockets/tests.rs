@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod socket_tests {
     use crate::sockets::tickets;
 
     #[test]
