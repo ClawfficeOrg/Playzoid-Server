@@ -87,11 +87,11 @@ expanding scope.
 ### R-5  Folder layout completion (TODO 0.1-2)
 - **branch:** `chore/structure/phase-0.1-layout`
 - **acceptance:**
-  - [ ] Create `src/entities/mod.rs` (empty `pub mod` placeholders OK with a doc comment).
-  - [ ] Create `src/middleware/mod.rs`.
-  - [ ] Create `src/services/mod.rs`.
-  - [ ] Wire each into `src/main.rs` with `mod entities; mod middleware; mod services;`.
-  - [ ] `cargo build` passes; no clippy warnings (use `//! placeholder` doc comments, no `#[allow(dead_code)]`).
+  - [x] Create `src/entities/mod.rs` (empty `pub mod` placeholders OK with a doc comment).
+  - [x] Create `src/middleware/mod.rs`.
+  - [x] Create `src/services/mod.rs`.
+  - [x] Wire each into `src/main.rs` with `mod entities; mod middleware; mod services;`.
+  - [x] `cargo build` passes; no clippy warnings.
 - **commit:** `chore(structure): scaffold entities/middleware/services modules`
 
 ### R-6  Real `.env` loading + bind from env (TODO 0.1-3)

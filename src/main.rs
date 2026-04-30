@@ -3,6 +3,9 @@ use tracing::info;
 use tracing_actix_web::TracingLogger;
 
 mod api;
+mod entities;
+mod middleware;
+mod services;
 mod sockets;
 
 #[actix_web::main]
