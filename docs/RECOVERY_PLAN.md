@@ -127,11 +127,11 @@ expanding scope.
 ### R-9  Doc/strict-mode fixes
 - **branch:** `docs/cleanup-and-truth`
 - **acceptance:**
-  - [ ] `docs/PLAN.md` is removed (it's an obsolete audit plan; `TaloRustServerPlan.md` is canonical). Add a one-line stub redirecting to TaloRustServerPlan.md.
-  - [ ] Fix `docs/TALO_API_STRUCTS.md`: hyphens in struct names (`put-storage_Body`) are invalid Rust. Either (a) rename to `PutStorageBody` etc., or (b) prepend a header noting the file is a *raw extraction artifact* and not directly compilable. Pick (b) — cheaper, preserves provenance.
-  - [ ] `tools/zod_to_rust.js`: add a `toPascalCase` sanitizer so future regenerations produce valid identifiers.
-  - [ ] Create `memory/projects/playzoid-server/project.md` with the decision-log skeleton referenced by `GUIDELINES.md` and `TODO.md`. Seed it with one decision entry: "Use Argon2 (not bcrypt) for password hashing — 2026-04-30".
-  - [ ] Tick all completed Phase 0.1 boxes in `docs/TODO.md`; *un*-tick those falsely closed (this is the recovery's main truth-restoration step).
+  - [x] `docs/PLAN.md` collapsed to a one-paragraph redirect stub pointing at `TaloRustServerPlan.md`, `TODO.md`, and `RECOVERY_PLAN.md`.
+  - [x] Prepended a `RAW EXTRACTION ARTIFACT` header to `docs/TALO_API_STRUCTS.md` explaining that hyphenated struct names are intentional artifacts of the upstream filenames; consumers must rename before lifting.
+  - [x] `tools/zod_to_rust.js`: `toPascalCase` sanitizer added so future regenerations emit valid Rust identifiers.
+  - [x] Created `memory/projects/playzoid-server/project.md` with the decision-log skeleton; seeded with the Argon2 password-hash decision (2026-04-30).
+  - [x] `docs/TODO.md`: added a Phase 0.1 status table mapping each task to its actual completion evidence (R-4..R-10 / PRs #4..#9). Phase 0.1 truth restored.
 - **commit:** `docs: collapse PLAN, fix struct extractor, seed decision log, correct TODO state`
 
 ### R-10  Dockerfile rust version bump

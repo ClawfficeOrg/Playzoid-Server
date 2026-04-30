@@ -34,6 +34,24 @@
 | 0.1-10 | Set up GitHub Actions CI: `cargo fmt --check`, `cargo clippy`, `cargo test`, optional `sqlx prepare` check | small | gpt-5-mini |
 | 0.1-11 | Write `CHANGES.md` initial entry | small | gpt-5-mini |
 
+**Phase 0.1 status (truth restoration after OpenClaw blow-up — see `docs/RECOVERY_PLAN.md`):**
+
+| #     | Status      | Evidence |
+|-------|-------------|----------|
+| 0.1-1 | ✅ done     | `Cargo.toml` (recovery R-4, PR #5) — full dep set including sqlx, jsonwebtoken, redis, dotenvy, argon2 |
+| 0.1-2 | ✅ done     | `src/{api,entities,middleware,services,sockets}/mod.rs` (recovery R-5, PR #6) |
+| 0.1-3 | ✅ done     | `src/config.rs` + `src/main.rs` dotenv wiring (recovery R-6, PR #7) |
+| 0.1-4 | ✅ done     | `src/api/healthz.rs` HTTP, plus ws ping in `src/sockets/ws.rs` (Phase 0.1 + R-7) |
+| 0.1-5 | ✅ done     | `src/db.rs` + DB-aware healthz (recovery R-7, PR #8) |
+| 0.1-6 | ✅ done     | `migrations/20260501000001_create_players.{up,down}.sql` (recovery R-8, PR #9) |
+| 0.1-7 | ✅ done     | `tracing-subscriber` + `tracing-actix-web` already wired |
+| 0.1-8 | ✅ done     | `.env.example`, `config/docker-compose.dev.yml` |
+| 0.1-9 | ✅ done     | `Dockerfile` (multi-stage, rust:1.88-slim builder — R-10) |
+| 0.1-10 | ✅ done    | `.github/workflows/ci.yml` (consolidated in R-3, PR #4); now includes fmt + clippy + test + cargo-audit + docker-smoke + sqlx-migrate |
+| 0.1-11 | ✅ done    | `docs/CHANGES.md` |
+
+Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
+
 **Milestone Review Steps:**
 1. Run `docker compose up` — all services healthy
 2. `curl http://localhost:8080/healthz` → `{"status":"ok"}`
