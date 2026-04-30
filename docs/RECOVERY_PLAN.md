@@ -97,12 +97,12 @@ expanding scope.
 ### R-6  Real `.env` loading + bind from env (TODO 0.1-3)
 - **branch:** `feat/config/dotenv-and-bind`
 - **acceptance:**
-  - [ ] `main.rs` calls `dotenvy::dotenv().ok()` before reading config.
-  - [ ] HOST/PORT read from env with sensible defaults (`127.0.0.1` / `8080`).
-  - [ ] A `src/config.rs` module exposes `pub struct Config { pub host, pub port, pub database_url, pub redis_url, pub jwt_secret, pub jwt_expiry_secs }` loaded once at startup; subsequent phases will inject it via `web::Data`.
-  - [ ] `Config::from_env()` returns `Result<Self, anyhow::Error>` and validates `JWT_SECRET.len() >= 32` (per GUIDELINES.md security policy).
-  - [ ] Server logs `Starting Playzoid server on {host}:{port}` and the bound socket address.
-  - [ ] Unit test: `Config::from_env()` happy-path with `temp_env` or by setting vars in the test.
+  - [x] `main.rs` calls `dotenvy::dotenv().ok()` before reading config.
+  - [x] HOST/PORT read from env with sensible defaults (`127.0.0.1` / `8080`).
+  - [x] A `src/config.rs` module exposes `pub struct Config { pub host, pub port, pub database_url, pub redis_url, pub jwt_secret, pub jwt_expiry_secs }` loaded once at startup; subsequent phases will inject it via `web::Data`.
+  - [x] `Config::from_env()` returns `Result<Self, anyhow::Error>` and validates `JWT_SECRET.len() >= 32` (per GUIDELINES.md security policy).
+  - [x] Server logs `Starting Playzoid server on {host}:{port}` and the bound socket address.
+  - [x] Unit test: `Config::from_env()` happy-path + two negative cases (short JWT, missing DATABASE_URL); 5 tests pass.
 - **commit:** `feat(config): load .env, validate JWT secret length, bind from env`
 
 ### R-7  sqlx pool wiring (TODO 0.1-5)
