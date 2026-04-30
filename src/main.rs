@@ -1,4 +1,4 @@
-use actix_web::{web, App, HttpServer};
+use actix_web::{App, HttpServer, web};
 use tracing::info;
 use tracing_actix_web::TracingLogger;
 

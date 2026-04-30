@@ -1,6 +1,6 @@
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use once_cell::sync::Lazy;
 use uuid::Uuid;
 
 // Simple in-memory ticket store for socket authentication
