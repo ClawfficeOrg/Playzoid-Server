@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/healthz").route(web::get().to(healthz)));
@@ -10,8 +10,8 @@ async fn healthz() -> HttpResponse {
 
 #[cfg(test)]
 mod healthz_tests {
-    use actix_web::{test, App};
     use super::*;
+    use actix_web::{App, test};
 
     #[actix_web::test]
     async fn test_healthz_returns_ok() {
