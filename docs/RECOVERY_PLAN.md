@@ -73,15 +73,15 @@ expanding scope.
 ### R-4  Complete Cargo.toml dependencies (TODO 0.1-1)
 - **branch:** `chore/deps/phase-0.1-complete`
 - **acceptance:**
-  - [ ] `tokio` features include `full` (was: `rt-multi-thread, macros`).
-  - [ ] Add `sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls", "macros", "chrono", "uuid", "migrate"] }`.
-  - [ ] Add `jsonwebtoken = "9"`.
-  - [ ] Add `redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }`.
-  - [ ] Add `dotenvy = "0.15"`.
-  - [ ] Add `argon2 = "0.5"` (password hashing — supersedes bcrypt per security guideline).
-  - [ ] Add `thiserror = "1"` and `anyhow = "1"` (per GUIDELINES.md error policy).
-  - [ ] Add `validator = { version = "0.18", features = ["derive"] }`.
-  - [ ] `cargo build --all-targets` still passes; **no new code yet** — only deps + a dummy reference to silence unused-dep lint if any (typically Cargo doesn't warn on unused deps; if it does, add `#[allow(unused_imports)]` stubs).
+  - [x] `tokio` features include `full` (was: `rt-multi-thread, macros`).
+  - [x] Add `sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls", "macros", "chrono", "uuid", "migrate"] }`.
+  - [x] Add `jsonwebtoken = "9"`.
+  - [x] Add `redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }`.
+  - [x] Add `dotenvy = "0.15"`.
+  - [x] Add `argon2 = "0.5"` (password hashing — supersedes bcrypt per security guideline).
+  - [x] Add `thiserror = "1"` and `anyhow = "1"` (per GUIDELINES.md error policy).
+  - [x] Add `validator = { version = "0.18", features = ["derive"] }`.
+  - [x] `cargo build --all-targets` passes; no unused-dep warnings.
 - **commit:** `chore(deps): pin sqlx, jsonwebtoken, redis, argon2, dotenvy for Phase 0.2`
 
 ### R-5  Folder layout completion (TODO 0.1-2)
@@ -177,7 +177,14 @@ When 0.2 closes, tag `v0.2.0` per GUIDELINES release process.
 > Agents: if a task can't be completed within scope, write a dated entry here
 > and stop. A human will redirect.
 
-- _none yet_
+### 2026-04-30 — cargo-audit advisories (informational, non-blocking)
+After R-4 landed the new dep set, `cargo audit` flags four transitive advisories:
+- **RUSTSEC-2024-0421** `idna` — Punycode handling. Pulled in transitively by `url`/`sqlx`. Wait for upstream bumps.
+- **RUSTSEC-2023-0071** `rsa` — Marvin Attack timing sidechannel. Pulled in by `sqlx-mysql` for password auth. Tracked upstream; mitigated in production by using TLS to MySQL and not exposing the auth handshake.
+- **RUSTSEC-2024-0370** `proc-macro-error` (unmaintained) — dev-dependency of `validator_derive`/`sqlx-macros`. Build-time only.
+- **RUSTSEC-2026-0097** `rand` — unsound when a custom logger calls `rand::rng()` reentrantly. Not relevant to our usage.
+
+These are surfaced because the audit job is wired up (R-3) but `continue-on-error: true`, so they don't gate PRs. **Action:** revisit after Phase 0.2 once all top-level deps are pinned; tighten the audit gate then. _No human action required now._
 
 ---
 
