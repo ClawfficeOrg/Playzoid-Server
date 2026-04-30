@@ -2,6 +2,39 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-04-30 — Recovery (R-1 through R-10 closing)
+
+### Added
+- `docs/RECOVERY_PLAN.md` — autonomous-loop sequencer for closing the gaps left by the OpenClaw blow-up.
+- `.github/workflows/ci.yml` — `cargo-audit` job (continue-on-error) and `docker-smoke` job (PRs to main).
+- `Cargo.toml` — `sqlx 0.8`, `jsonwebtoken 9`, `redis 0.27`, `dotenvy 0.15`, `argon2 0.5`, `thiserror`, `anyhow`, `validator 0.18`. `tokio` upgraded to `features = ["full"]`.
+- `src/{entities,middleware,services}/mod.rs` — folder layout per `TaloRustServerPlan.md`.
+- `src/config.rs` — typed `Config::from_env()` with JWT secret length validation.
+- `src/db.rs` — `build_pool()` for sqlx MySQL; injected as optional `web::Data<MySqlPool>`.
+- DB-aware `/healthz` returning `{"status":"ok","db":"ok|down|unconfigured"}`.
+- `migrations/20260501000001_create_players.{up,down}.sql` — canonical players table with self-referencing `parent_account_id` for subaccounts.
+- `.github/workflows/ci.yml` — `sqlx-migrate` job runs migrations against ephemeral mysql:8.0.
+- `memory/projects/playzoid-server/project.md` — project decision log; seeded with the Argon2 decision (2026-04-30).
+
+### Changed
+- `Dockerfile` builder image: `rust:1.83-slim` → `rust:1.88-slim` (edition 2024 + transitive deps).
+- `docs/PLAN.md` collapsed to redirect stub; canonical plan is `TaloRustServerPlan.md`.
+- `docs/TALO_API_STRUCTS.md` gains a `RAW EXTRACTION ARTIFACT` header explaining the non-compilable hyphenated struct names.
+- `docs/TODO.md` — Phase 0.1 status table added; reflects actual completion evidence.
+
+### Fixed
+- Removed accidental `src/sockets/tickets.rs.{bak,backup,orig}` artifacts (PR #3).
+- CI: deleted broken duplicate `.github/workflows/rust-ci.yml` (referenced non-existent `dtolnay/install-rust@v1`).
+- CI: `cargo fmt --all` to unblock `fmt --check` gate that had drifted on `main`.
+- `tools/zod_to_rust.js`: added `toPascalCase` so generated struct names are valid Rust identifiers.
+
+### Repo hygiene
+- Deleted stale remote branches (subsumed by `main`):
+  `feature/apply-rust-patches-1776192453`,
+  `feature/apply-rust-patches-1776192453-backup-1776269578`,
+  `feature/apply-rust-patches-1776192453-backup-review-1777485710`,
+  `feature/init-rust-talo-verify`.
+
 ## [Unreleased] — 2026-04-06
 ### Added
 - docs/TODO.md — phased, semver-mapped TODO roadmap for Playzoid-Server
