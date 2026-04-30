@@ -251,4 +251,44 @@ Verification plan (next steps):
 Appendix: sources
 - https://github.com/TaloDev/backend (src/routes, src/socket)
 
+---
+
+## Canonical `players` table (database schema)
+
+The initial migration `migrations/20260501000001_create_players.up.sql`
+creates the canonical `players` table. This table backs both root
+accounts and subaccounts (see `TaloRustServerPlan.md`); subaccounts are
+represented by a non-NULL `parent_account_id` referencing another row in
+the same table — there is no separate `subaccounts` table.
+
+| Column              | Type                                              | Notes                                                                 |
+|---------------------|---------------------------------------------------|-----------------------------------------------------------------------|
+| `id`                | `BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT`      | Internal numeric ID. Never exposed in public APIs.                    |
+| `public_id`         | `CHAR(36) UNIQUE NOT NULL`                        | UUID v4 used as the external player identifier.                        |
+| `username`          | `VARCHAR(64) UNIQUE NOT NULL`                     | Login handle.                                                         |
+| `email`             | `VARCHAR(255) UNIQUE NULL`                        | Optional; required for password-reset flows.                          |
+| `password_hash`     | `VARCHAR(255) NOT NULL`                           | Argon2id hash (see decision log).                                     |
+| `parent_account_id` | `BIGINT UNSIGNED NULL` → `players(id)` (FK)       | NULL = root account. Non-NULL = subaccount of the referenced player.  |
+| `status`            | `ENUM('active','suspended','deleted') NOT NULL`   | Default `'active'`. `'deleted'` is a soft-delete tombstone.            |
+| `created_at`        | `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`     |                                                                       |
+| `updated_at`        | `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP` |                                                       |
+| `deleted_at`        | `DATETIME NULL`                                   | Set when `status` transitions to `deleted`.                            |
+
+Indexes:
+
+- `UNIQUE` on `public_id`, `username`, `email`.
+- Secondary index on `parent_account_id` for fast subaccount lookup.
+- Secondary index on `status` to support active-player queries.
+
+Foreign key behaviour:
+
+- `fk_players_parent_account` uses `ON DELETE SET NULL` so removing a
+  parent account does not cascade-destroy its subaccounts; they are
+  promoted to root accounts and may then be cleaned up by application
+  policy.
+
+The migration pair (`*.up.sql` / `*.down.sql`) is verified in CI by the
+optional `sqlx-migrate` job, which runs against an ephemeral MySQL 8
+service and exercises both `sqlx migrate run` and `sqlx migrate revert`.
+
 <!-- End of file (verified partial mapping). Sonnet produced this update. -->
