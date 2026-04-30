@@ -97,6 +97,24 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 | 0.2-12 | Write integration tests for `/auth` and `/players` endpoints | medium | sonnet |
 | 0.2-13 | Document `/auth` and `/players` endpoints in `TALO_API.md` | small | gpt-5-mini |
 
+**Phase 0.2 status (live tracker):**
+
+| #     | Status        | Evidence |
+|-------|---------------|----------|
+| 0.2-1 | ⏳ pending    | depends on auth helpers (done, PR #11) |
+| 0.2-2 | ⏳ pending    | depends on 0.2-1 |
+| 0.2-3 | ⏳ pending    | depends on 0.2-1 |
+| 0.2-4 | ⏳ pending    | depends on 0.2-2 |
+| 0.2-5 | ⏳ pending    | depends on 0.2-2 |
+| 0.2-6 | ⏳ pending    | depends on 0.2-2 |
+| 0.2-7 | ✅ verified   | `parent_account_id` FK already in `migrations/20260501000001_create_players.up.sql` (R-8, PR #9). No additional migration needed — see `docs/RECOVERY_PLAN.md` §3. |
+| 0.2-8 | ⏳ pending    | depends on 0.2-3, 0.2-7 |
+| 0.2-9 | ⏳ pending    | depends on 0.2-7 |
+| 0.2-10 | ⏳ pending   | depends on 0.2-2 |
+| 0.2-11 | 🟡 partial    | auth-service unit tests landed with PR #11 (`src/services/auth.rs::tests`); endpoint tests follow with 0.2-1..0.2-3 |
+| 0.2-12 | ⏳ pending   | depends on 0.2-1..0.2-9 |
+| 0.2-13 | ⏳ pending   | depends on 0.2-1..0.2-10 |
+
 **Milestone Review Steps:**
 1. `cargo test` passes all auth + player tests
 2. Manual test: register → login → access protected route → 200; without token → 401
