@@ -137,7 +137,7 @@ expanding scope.
 ### R-10  Dockerfile rust version bump
 - **branch:** folded into R-3 (`chore/ci/consolidate-workflows`) — without this fix the docker-smoke gate added in R-3 fails on every PR.
 - **acceptance:**
-  - [x] `Dockerfile`'s builder stage uses `rust:1.85-slim` or newer (edition 2024 requires ≥1.85).
+  - [x] `Dockerfile`'s builder stage uses `rust:1.88-slim` (edition 2024 needs ≥1.85; transitive deps `time@0.3.47` and `icu_properties_data@2.2.0` pull `rustc ≥1.88`).
   - [x] `docker build .` succeeds (verified by CI's docker-smoke job on the R-3 PR).
 - **commit:** `fix(docker): bump builder to rust:1.85 for edition 2024` (squashed into R-3 PR)
 
