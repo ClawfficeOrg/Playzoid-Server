@@ -2,6 +2,14 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-04-30 — Phase 0.2 opens
+
+### Added
+- `src/services/auth.rs` — Argon2id `hash_password`/`verify_password` + HS256 `issue_jwt`/`verify_jwt` with `Claims { sub, iat, exp }`. I/O-free; six unit tests cover round-trip, length bounds, malformed hash, wrong secret, and expiry. (PR #11, TODO 0.2 prerequisite for 0.2-1..0.2-3.)
+
+### Verified (no functional change)
+- TODO 0.2-7 — `parent_account_id BIGINT UNSIGNED NULL` self-referencing FK is already present in `migrations/20260501000001_create_players.up.sql` (added in R-8 / PR #9). The acceptance criteria for 0.2-7 are therefore already satisfied; this entry exists to close the loop in `docs/TODO.md`'s Phase 0.2 tracker.
+
 ## [Unreleased] — 2026-04-30 — Recovery (R-1 through R-10 closing)
 
 ### Added
