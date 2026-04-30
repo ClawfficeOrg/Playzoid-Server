@@ -1,12 +1,17 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/players").route("/{id}", web::get().to(get_player)).route("", web::post().to(create_player)));
+    cfg.service(
+        web::scope("/players")
+            .route("/{id}", web::get().to(get_player))
+            .route("", web::post().to(create_player)),
+    );
 }
 
 async fn get_player(path: web::Path<String>) -> HttpResponse {
     let id = path.into_inner();
-    HttpResponse::Ok().json(serde_json::json!({"id": id, "username": "sample_user", "status": "online"}))
+    HttpResponse::Ok()
+        .json(serde_json::json!({"id": id, "username": "sample_user", "status": "online"}))
 }
 
 async fn create_player() -> HttpResponse {

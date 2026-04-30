@@ -1,7 +1,7 @@
 use actix::prelude::*;
-use actix_web::{web, Error, HttpRequest, HttpResponse};
+use actix_web::{Error, HttpRequest, HttpResponse, web};
 use actix_web_actors::ws;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Actor handling a single WebSocket connection
 pub struct WsConn {
@@ -14,7 +14,8 @@ impl Actor for WsConn {
 }
 
 fn send_error<E: ToString>(ctx: &mut ws::WebsocketContext<WsConn>, code: &str, message: E) {
-    let payload = json!({ "res": "v1.error", "data": { "code": code, "message": message.to_string() } });
+    let payload =
+        json!({ "res": "v1.error", "data": { "code": code, "message": message.to_string() } });
     if let Ok(s) = serde_json::to_string(&payload) {
         ctx.text(s);
     }
@@ -22,7 +23,10 @@ fn send_error<E: ToString>(ctx: &mut ws::WebsocketContext<WsConn>, code: &str, m
 
 fn handle_players_identify(ctx: &mut ws::WebsocketContext<WsConn>, data: Value) {
     // Minimal stub: accept playerAliasId and return identify.success with alias and session placeholders
-    let alias_id = data.get("playerAliasId").and_then(|v| v.as_i64()).unwrap_or(0);
+    let alias_id = data
+        .get("playerAliasId")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let resp = json!({
         "res": "v1.players.identify.success",
         "data": {
@@ -75,7 +79,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                         match req {
                             "v1.players.identify" => handle_players_identify(ctx, data),
                             "v1.channels.message" => handle_channels_message(ctx, data),
-                            _ => send_error(ctx, "UNHANDLED_REQUEST", format!("Unknown req: {}", req)),
+                            _ => send_error(
+                                ctx,
+                                "UNHANDLED_REQUEST",
+                                format!("Unknown req: {}", req),
+                            ),
                         }
                     }
                     Err(e) => {
@@ -84,8 +92,8 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                 }
             }
             Ok(ws::Message::Ping(b)) => ctx.pong(&b),
-            Ok(ws::Message::Pong(_)) => {},
-            Ok(ws::Message::Binary(_)) => {},
+            Ok(ws::Message::Pong(_)) => {}
+            Ok(ws::Message::Binary(_)) => {}
             Ok(ws::Message::Close(reason)) => {
                 ctx.close(reason);
                 ctx.stop();
@@ -98,11 +106,19 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
 pub async fn ws_index(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     // Extract ticket from query param: ?ticket=...
     let query = r.query_string();
-    let ticket_opt = url::form_urlencoded::parse(query.as_bytes()).find(|(k, _)| k == "ticket").map(|(_, v)| v.into_owned());
+    let ticket_opt = url::form_urlencoded::parse(query.as_bytes())
+        .find(|(k, _)| k == "ticket")
+        .map(|(_, v)| v.into_owned());
     if let Some(ticket) = ticket_opt {
         if let Some(alias_id) = crate::sockets::tickets::verify_ticket(&ticket) {
             // Optionally revoke after use: crate::sockets::tickets::revoke_ticket(&ticket);
-            return ws::start(WsConn { alias_id: Some(alias_id) }, &r, stream);
+            return ws::start(
+                WsConn {
+                    alias_id: Some(alias_id),
+                },
+                &r,
+                stream,
+            );
         } else {
             // return an error response by starting and immediately sending v1.error then closing
             // but actix ws::start requires an actor; create actor with no alias and send error on connect
