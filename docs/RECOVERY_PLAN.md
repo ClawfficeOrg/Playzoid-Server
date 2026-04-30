@@ -117,11 +117,11 @@ expanding scope.
 ### R-8  Initial players migration (TODO 0.1-6)
 - **branch:** `feat/db/migrations-players`
 - **acceptance:**
-  - [ ] `migrations/20260501000001_create_players.up.sql` defines the `players` table with: `id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, public_id CHAR(36) UNIQUE NOT NULL, username VARCHAR(64) UNIQUE NOT NULL, email VARCHAR(255) UNIQUE, password_hash VARCHAR(255) NOT NULL, parent_account_id BIGINT UNSIGNED NULL REFERENCES players(id), status ENUM('active','suspended','deleted') NOT NULL DEFAULT 'active', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, deleted_at DATETIME NULL`.
-  - [ ] Matching `.down.sql` drops the table.
-  - [ ] `parent_account_id` is the subaccount link foreseen in `TaloRustServerPlan.md`.
-  - [ ] Documented in `docs/TALO_API.md` as the canonical Player table.
-  - [ ] CI adds an optional job `sqlx-migrate` against an ephemeral mysql service (allowed to fail with warning until secrets configured).
+  - [x] `migrations/20260501000001_create_players.up.sql` defines the `players` table with: `id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, public_id CHAR(36) UNIQUE NOT NULL, username VARCHAR(64) UNIQUE NOT NULL, email VARCHAR(255) UNIQUE, password_hash VARCHAR(255) NOT NULL, parent_account_id BIGINT UNSIGNED NULL REFERENCES players(id), status ENUM('active','suspended','deleted') NOT NULL DEFAULT 'active', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, deleted_at DATETIME NULL`.
+  - [x] Matching `.down.sql` drops the table.
+  - [x] `parent_account_id` is the subaccount link foreseen in `TaloRustServerPlan.md`.
+  - [x] Documented in `docs/TALO_API.md` as the canonical Player table.
+  - [x] CI adds an optional job `sqlx-migrate` against an ephemeral mysql service (allowed to fail with warning until secrets configured).
 - **commit:** `feat(db): initial players migration with subaccount linkage`
 
 ### R-9  Doc/strict-mode fixes

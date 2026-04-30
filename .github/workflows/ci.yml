@@ -72,6 +72,60 @@ jobs:
       - name: Run cargo-audit
         run: cargo audit
 
+  sqlx-migrate:
+    name: sqlx migrate (mysql)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: playzoid
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://root:root@127.0.0.1:3306/playzoid
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sqlx-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sqlx-
+
+      - name: Install sqlx-cli
+        run: cargo install --locked sqlx-cli --no-default-features --features mysql,rustls || true
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -uroot -proot --silent; then
+              echo "mysql is up"; exit 0;
+            fi
+            echo "waiting for mysql ($i)"; sleep 2;
+          done
+          echo "mysql did not become ready"; exit 1
+
+      - name: Run migrations (up)
+        run: sqlx migrate run --source migrations
+
+      - name: Revert migrations (down)
+        run: sqlx migrate revert --source migrations
+
   docker-smoke:
     name: Docker build smoke
     runs-on: ubuntu-latest
