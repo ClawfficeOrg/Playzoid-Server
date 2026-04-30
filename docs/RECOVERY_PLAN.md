@@ -108,10 +108,10 @@ expanding scope.
 ### R-7  sqlx pool wiring (TODO 0.1-5)
 - **branch:** `feat/db/sqlx-pool`
 - **acceptance:**
-  - [ ] `src/db.rs` exposes `pub async fn build_pool(url: &str) -> sqlx::Result<sqlx::MySqlPool>` with sensible pool options (max_connections=10, acquire_timeout=5s).
-  - [ ] `main.rs` builds the pool from `Config::database_url`, attaches via `web::Data<MySqlPool>`.
-  - [ ] `/healthz` upgraded: returns `{"status":"ok","db":"ok"|"down"}` after a `SELECT 1` ping (timeout 500ms; never fails the request — surface state).
-  - [ ] Integration-style test: spin a pool against `MYSQL_URL` env var if present, else skip with `#[ignore]`.
+  - [x] `src/db.rs` exposes `pub async fn build_pool(url: &str) -> sqlx::Result<sqlx::MySqlPool>` with `max_connections=10, acquire_timeout=5s`.
+  - [x] `main.rs` builds the pool from `Config::database_url`, attaches via `web::Data<MySqlPool>` (skipped gracefully when DB is unreachable so dev/CI without MySQL still boots).
+  - [x] `/healthz` upgraded: returns `{"status":"ok","db":"ok|down|unconfigured"}` after a `SELECT 1` ping (500ms timeout; never fails the request).
+  - [x] Integration-style test: `#[ignore]`d test runs against `MYSQL_URL` env var when set.
 - **commit:** `feat(db): add sqlx MySQL pool and DB-aware healthz`
 
 ### R-8  Initial players migration (TODO 0.1-6)

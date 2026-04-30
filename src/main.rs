@@ -4,6 +4,7 @@ use tracing_actix_web::TracingLogger;
 
 mod api;
 mod config;
+mod db;
 mod entities;
 mod middleware;
 mod services;
@@ -29,16 +30,34 @@ async fn main() -> std::io::Result<()> {
     })?;
 
     let bind = cfg.bind_addr();
+
+    // Build the DB pool. We surface a friendly error but don't gate on a successful
+    // initial query — the pool will reconnect lazily.
+    let pool = match db::build_pool(&cfg.database_url).await {
+        Ok(p) => {
+            info!("Database pool initialised");
+            Some(p)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to initialise DB pool; continuing in degraded mode");
+            None
+        }
+    };
+
     info!("Starting Playzoid server on {}", bind);
 
-    HttpServer::new(|| {
-        App::new()
+    HttpServer::new(move || {
+        let mut app = App::new()
             .wrap(TracingLogger::default())
             .configure(api::healthz::config)
             .configure(api::auth::config)
             .configure(api::players::config)
             .configure(api::socket_ticket::config)
-            .route("/ws", web::get().to(sockets::ws::ws_index))
+            .route("/ws", web::get().to(sockets::ws::ws_index));
+        if let Some(p) = pool.clone() {
+            app = app.app_data(web::Data::new(p));
+        }
+        app
     })
     .bind(&bind)?
     .run()
