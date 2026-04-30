@@ -135,11 +135,11 @@ expanding scope.
 - **commit:** `docs: collapse PLAN, fix struct extractor, seed decision log, correct TODO state`
 
 ### R-10  Dockerfile rust version bump
-- **branch:** `fix/docker/rust-edition-2024`
+- **branch:** folded into R-3 (`chore/ci/consolidate-workflows`) — without this fix the docker-smoke gate added in R-3 fails on every PR.
 - **acceptance:**
-  - [ ] `Dockerfile`'s builder stage uses `rust:1.85-slim` or newer (edition 2024 requires ≥1.85).
-  - [ ] `docker build .` succeeds locally (verified by reviewer or CI smoke step from R-3).
-- **commit:** `fix(docker): bump builder to rust:1.85 for edition 2024`
+  - [x] `Dockerfile`'s builder stage uses `rust:1.85-slim` or newer (edition 2024 requires ≥1.85).
+  - [x] `docker build .` succeeds (verified by CI's docker-smoke job on the R-3 PR).
+- **commit:** `fix(docker): bump builder to rust:1.85 for edition 2024` (squashed into R-3 PR)
 
 ---
 
