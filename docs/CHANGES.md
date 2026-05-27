@@ -2,6 +2,14 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-05-27 — API documentation (task 0.2-13)
+
+### Changed
+- `docs/TALO_API.md` — added "Playzoid-Server Implemented Endpoints (Phase 0.2)" section documenting all 7 implemented endpoints (`POST /auth/register`, `POST /auth/login`, `GET /players/{id}`, `PUT /players/{id}`, `DELETE /players/{id}`, `POST /players/subaccount`, `GET /players/{id}/subaccounts`) with full request/response shapes, field validation constraints, HTTP status code tables, Rust struct references, Redis caching notes, and a `PlayerView` common-type reference.
+- `docs/TODO.md` — marked task 0.2-13 as done. Phase 0.2 is now complete.
+
+---
+
 ## [Unreleased] — 2026-05-27 — Integration tests + lib crate (tasks 0.2-12)
 
 ### Added
