@@ -162,6 +162,28 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 | 0.3-16 | Write unit + integration tests for leaderboard and save endpoints | medium | nemotron |
 | 0.3-17 | Update `TALO_API.md` with leaderboard, save, WS shapes | small | gpt-5-mini |
 
+**Phase 0.3 status (live tracker):**
+
+| #     | Status        | Evidence |
+|-------|---------------|----------|
+| 0.3-1 | ⏳ pending    | |
+| 0.3-2 | ⏳ pending    | |
+| 0.3-3 | ⏳ pending    | |
+| 0.3-4 | ⏳ pending    | |
+| 0.3-5 | ⏳ pending    | |
+| 0.3-6 | ⏳ pending    | |
+| 0.3-7 | ⏳ pending    | |
+| 0.3-8 | ⏳ pending    | |
+| 0.3-9 | ⏳ pending    | |
+| 0.3-10 | ⏳ pending   | |
+| 0.3-11 | ⏳ pending   | |
+| 0.3-12 | ⏳ pending   | |
+| 0.3-13 | ⏳ pending   | |
+| 0.3-14 | ⏳ pending   | |
+| 0.3-15 | ⏳ pending   | |
+| 0.3-16 | ⏳ pending   | |
+| 0.3-17 | ⏳ pending   | |
+
 **Milestone Review Steps:**
 1. All cargo tests pass
 2. WS load test: 100 connections, 1000 messages — no drops
