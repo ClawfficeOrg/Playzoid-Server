@@ -2,6 +2,18 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-05-27 — Phase 0.2 player CRUD (tasks 0.2-4, 0.2-5, 0.2-6)
+
+### Changed
+- `src/api/players.rs` — replaced stub handlers with real DB-backed implementations:
+  - `GET /players/{id}` resolves parent `public_id` via secondary lookup and returns `PlayerView`.
+  - `PUT /players/{id}` updates own username/email with validation (400/403/404/409).
+  - `DELETE /players/{id}` soft-deletes own account (sets `status=deleted`, `deleted_at=NOW()`).
+  - `POST /players` kept as 501 placeholder pending task 0.2-8.
+- `src/services/players.rs` — added `Forbidden` error variant, `UpdatePlayerInput`, and three new service functions: `find_player_view`, `update_player`, `soft_delete_player`. Added ownership-check unit tests that use a lazy (never-connecting) pool.
+
+---
+
 ## [Unreleased] — 2026-05-27 — Ralph autonomous task loop
 
 ### Added
