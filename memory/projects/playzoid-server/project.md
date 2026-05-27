@@ -36,6 +36,22 @@ and [`docs/TODO.md`](../../../docs/TODO.md).
 
 ---
 
+### 2026-05-27 — Docker dev stack is the live integration test target
+
+- **Context:** Integration tests needed a live MySQL + Redis. The project already
+  had a Docker Compose dev stack confirmed healthy from the Phase 0.2 smoke
+  test session.
+- **Decision:** Integration tests default to
+  `mysql://playzoid:password@127.0.0.1:3306/playzoid_dev` and
+  `redis://127.0.0.1:6379` (the Docker dev stack). Both URLs are overrideable
+  via `DATABASE_URL` / `REDIS_URL` env vars for CI or alternate environments.
+- **Pattern:** Tests are marked `#[ignore]` so `cargo test` skips them;
+  `cargo test -- --ignored` runs the full suite when Docker is up.
+- **Consequences:** No in-memory test DB; tests use UUID-prefixed unique
+  usernames to avoid conflicts on repeated runs.
+
+---
+
 <!-- Append new decisions below this line. Use the dated heading format above. -->
 
 ---

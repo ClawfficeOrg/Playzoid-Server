@@ -112,7 +112,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 | 0.2-9 | ✅ done       | `GET /players/{id}/subaccounts` — lists own subaccounts (own account only) |
 | 0.2-10 | ✅ done      | Redis `ConnectionManager` wired; player view cached on login/GET, invalidated on PUT/DELETE |
 | 0.2-11 | ✅ done       | auth service tests (PR #11) + middleware tests (PR #14) + API-layer tests for all player endpoints |
-| 0.2-12 | ⏳ pending   | depends on 0.2-1..0.2-9 |
+| 0.2-12 | ✅ done       | 16 integration tests in `tests/auth_integration.rs` + `tests/players_integration.rs`; all pass against Docker dev stack |
 | 0.2-13 | ⏳ pending   | depends on 0.2-1..0.2-10 |
 
 **Milestone Review Steps:**

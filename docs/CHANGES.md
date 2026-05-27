@@ -2,7 +2,19 @@
 
 # CHANGES.md
 
-## [Unreleased] — 2026-05-27 — Phase 0.2 subaccounts + Redis cache (tasks 0.2-8, 0.2-9, 0.2-10)
+## [Unreleased] — 2026-05-27 — Integration tests + lib crate (tasks 0.2-12)
+
+### Added
+- `src/lib.rs` — exposes all modules as a library crate so `tests/` can build test apps.
+- `tests/auth_integration.rs` — 6 integration tests covering register (201/409/400) and login (200/401/401).
+- `tests/players_integration.rs` — 10 integration tests covering GET/PUT/DELETE own/cross-account, subaccount create, subaccount list. All 16 pass against the Docker dev stack.
+
+### Changed
+- `src/main.rs` — now uses `playzoid_server::*` from lib crate instead of declaring modules itself.
+- `memory/projects/playzoid-server/project.md` — documented Docker dev stack as integration test target.
+
+---
+
 
 ### Added
 - `src/services/cache.rs` — Redis-backed player view cache: `get_player_view`, `set_player_view`, `invalidate_player`. Best-effort; callers fall back to DB on any error.
