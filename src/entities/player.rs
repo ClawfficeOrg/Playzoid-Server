@@ -13,13 +13,43 @@ use sqlx::FromRow;
 ///
 /// `Deleted` is a tombstone — the row stays for FK integrity until purged
 /// by a future maintenance job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
-#[sqlx(type_name = "ENUM", rename_all = "lowercase")]
+///
+/// We implement `Type` and `Decode` manually because MySQL returns ENUM
+/// columns as text at the wire level; the derive macro's `type_name = "ENUM"`
+/// hint does not survive sqlx's type-compatibility check on MySQL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PlayerStatus {
     Active,
     Suspended,
     Deleted,
+}
+
+use sqlx::TypeInfo as _; // needed for .name() on MySqlTypeInfo
+
+// Treat PlayerStatus as a MySQL string so sqlx decodes ENUM columns correctly.
+impl sqlx::Type<sqlx::MySql> for PlayerStatus {
+    fn type_info() -> sqlx::mysql::MySqlTypeInfo {
+        <String as sqlx::Type<sqlx::MySql>>::type_info()
+    }
+    fn compatible(ty: &sqlx::mysql::MySqlTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::MySql>>::compatible(ty)
+            || ty.name().eq_ignore_ascii_case("ENUM")
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::MySql> for PlayerStatus {
+    fn decode(
+        value: sqlx::mysql::MySqlValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let s = <String as sqlx::Decode<'r, sqlx::MySql>>::decode(value)?;
+        match s.as_str() {
+            "active" => Ok(PlayerStatus::Active),
+            "suspended" => Ok(PlayerStatus::Suspended),
+            "deleted" => Ok(PlayerStatus::Deleted),
+            other => Err(format!("unknown player status: {other:?}").into()),
+        }
+    }
 }
 
 /// Full player row, mirroring the `players` table 1:1.
