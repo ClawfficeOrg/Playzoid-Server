@@ -84,7 +84,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 | # | Task | Complexity | Agent |
 |---|------|------------|-------|
 | 0.2-1 | Implement `POST /auth/login` — validate credentials, issue JWT | medium | sonnet |
-| 0.2-2 | Implement JWT middleware for protected routes | medium | sonnet |
+| 0.2-2 | 🔄 in-progress | medium | sonnet |
 | 0.2-3 | Implement `POST /auth/register` — create new player account | medium | sonnet |
 | 0.2-4 | Implement `GET /players/{id}` with auth guard | small | nemotron |
 | 0.2-5 | Implement `PUT /players/{id}` — update player profile | small | nemotron |
@@ -102,7 +102,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 | #     | Status        | Evidence |
 |-------|---------------|----------|
 | 0.2-1 | ⏳ pending    | depends on auth helpers (done, PR #11) |
-| 0.2-2 | ⏳ pending    | depends on 0.2-1 |
+| 0.2-2 | 🔄 in-progress | depends on 0.2-1 |
 | 0.2-3 | ⏳ pending    | depends on 0.2-1 |
 | 0.2-4 | ⏳ pending    | depends on 0.2-2 |
 | 0.2-5 | ⏳ pending    | depends on 0.2-2 |
