@@ -101,12 +101,12 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 
 | #     | Status        | Evidence |
 |-------|---------------|----------|
-| 0.2-1 | ⏳ pending    | depends on auth helpers (done, PR #11) |
-| 0.2-2 | 🔄 in-progress | depends on 0.2-1 |
-| 0.2-3 | ⏳ pending    | depends on 0.2-1 |
-| 0.2-4 | ⏳ pending    | depends on 0.2-2 |
-| 0.2-5 | ⏳ pending    | depends on 0.2-2 |
-| 0.2-6 | ⏳ pending    | depends on 0.2-2 |
+| 0.2-1 | ✅ done       | `POST /auth/login` + `POST /auth/register` landed in PR #13 |
+| 0.2-2 | ✅ done       | JWT Bearer extractor (`AuthenticatedUser`) landed in PR #14 |
+| 0.2-3 | ✅ done       | `POST /auth/register` shipped with 0.2-1 (PR #13) |
+| 0.2-4 | ✅ done       | `GET /players/{id}` DB-backed with parent_public_id resolution |
+| 0.2-5 | ✅ done       | `PUT /players/{id}` own-account update with validation |
+| 0.2-6 | ✅ done       | `DELETE /players/{id}` soft-delete (status=deleted, deleted_at) |
 | 0.2-7 | ✅ verified   | `parent_account_id` FK already in `migrations/20260501000001_create_players.up.sql` (R-8, PR #9). No additional migration needed — see `docs/RECOVERY_PLAN.md` §3. |
 | 0.2-8 | ⏳ pending    | depends on 0.2-3, 0.2-7 |
 | 0.2-9 | ⏳ pending    | depends on 0.2-7 |
