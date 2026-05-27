@@ -4,3 +4,4 @@
 //! corresponding `api/*` handler. Populated in Phase 0.2.
 
 pub mod auth;
+pub mod players;
