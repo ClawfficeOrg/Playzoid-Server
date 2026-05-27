@@ -1,13 +1,19 @@
 //! `/players` HTTP endpoints.
 //!
-//! `GET    /players/{id}` — fetch a player's public profile (auth required).
-//! `PUT    /players/{id}` — update own profile (auth required; own account only).
-//! `DELETE /players/{id}` — soft-delete own account (auth required; own account only).
-//! `POST   /players`      — placeholder; subaccount creation is implemented in task 0.2-8.
+//! `GET    /players/{id}`             — fetch a player's public profile (auth required).
+//! `PUT    /players/{id}`             — update own profile (auth required; own account only).
+//! `DELETE /players/{id}`             — soft-delete own account (auth required; own account only).
+//! `GET    /players/{id}/subaccounts` — list own subaccounts (auth required; own account only).
+//! `POST   /players/subaccount`       — create a subaccount under the authenticated player.
 
+use crate::entities::player::PlayerView;
 use crate::middleware::auth::AuthenticatedUser;
-use crate::services::players::{self as players_svc, PlayerServiceError, UpdatePlayerInput};
+use crate::services::cache as cache_svc;
+use crate::services::players::{
+    self as players_svc, NewPlayer, PlayerServiceError, UpdatePlayerInput,
+};
 use actix_web::{HttpResponse, web};
+use redis::aio::ConnectionManager;
 use serde::Deserialize;
 use sqlx::MySqlPool;
 use validator::Validate;
@@ -15,29 +21,60 @@ use validator::Validate;
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/players")
+            // static-segment routes must come before /{id} or actix will
+            // match "subaccount" as an id value
+            .route("/subaccount", web::post().to(create_subaccount))
+            .route("/{id}/subaccounts", web::get().to(list_subaccounts))
             .route("/{id}", web::get().to(get_player))
             .route("/{id}", web::put().to(update_player))
-            .route("/{id}", web::delete().to(delete_player))
-            .route("", web::post().to(create_player)),
+            .route("/{id}", web::delete().to(delete_player)),
     );
 }
 
+// ── GET /players/{id} ─────────────────────────────────────────────────────────
+
 /// Fetch a player's public profile by `public_id`.
 ///
+/// Checks the Redis cache first; falls back to the database on a miss.
 /// Any authenticated user may retrieve any player's public profile.
-/// Returns 404 when the player does not exist or has been soft-deleted.
-#[tracing::instrument(skip(pool, _user))]
+#[tracing::instrument(skip(pool, cache, cfg, _user))]
 async fn get_player(
     path: web::Path<String>,
     pool: Option<web::Data<MySqlPool>>,
+    cache: Option<web::Data<ConnectionManager>>,
+    cfg: web::Data<crate::config::Config>,
     _user: AuthenticatedUser,
 ) -> HttpResponse {
     let Some(pool) = pool else {
         return HttpResponse::ServiceUnavailable().json(error_body("database unavailable"));
     };
     let public_id = path.into_inner();
+
+    // Cache read — treat any error as a miss.
+    if let Some(ref c) = cache {
+        match cache_svc::get_player_view::<PlayerView>(c.get_ref().clone(), &public_id).await {
+            Ok(Some(view)) => return HttpResponse::Ok().json(view),
+            Ok(None) => {}
+            Err(e) => tracing::warn!(error = %e, "cache miss (read error)"),
+        }
+    }
+
     match players_svc::find_player_view(pool.get_ref(), &public_id).await {
-        Ok(Some(view)) => HttpResponse::Ok().json(view),
+        Ok(Some(view)) => {
+            // Populate cache in the background — ignore errors.
+            if let Some(ref c) = cache
+                && let Err(e) = cache_svc::set_player_view(
+                    c.get_ref().clone(),
+                    &public_id,
+                    &view,
+                    cfg.jwt_expiry_secs,
+                )
+                .await
+            {
+                tracing::warn!(error = %e, "cache set failed");
+            }
+            HttpResponse::Ok().json(view)
+        }
         Ok(None) => HttpResponse::NotFound().json(error_body("player not found")),
         Err(e) => {
             tracing::error!(error = ?e, "get_player failed");
@@ -45,6 +82,8 @@ async fn get_player(
         }
     }
 }
+
+// ── PUT /players/{id} ─────────────────────────────────────────────────────────
 
 /// Fields that may be updated on a player profile.
 #[derive(Debug, Deserialize, Validate)]
@@ -61,12 +100,13 @@ pub struct UpdatePlayerRequest {
 /// Update the authenticated player's own profile.
 ///
 /// Returns 400 for validation errors, 403 when attempting to modify another
-/// player's account, 404 when the player is not found, 409 on username/email
-/// conflict.
-#[tracing::instrument(skip(pool, user))]
+/// player's account, 404 when the player is not found, 409 on conflict.
+/// Invalidates the Redis cache entry on success.
+#[tracing::instrument(skip(pool, cache, user))]
 async fn update_player(
     path: web::Path<String>,
     pool: Option<web::Data<MySqlPool>>,
+    cache: Option<web::Data<ConnectionManager>>,
     user: AuthenticatedUser,
     body: web::Json<UpdatePlayerRequest>,
 ) -> HttpResponse {
@@ -84,7 +124,14 @@ async fn update_player(
     match players_svc::update_player(pool.get_ref(), &public_id, &user.player_public_id, input)
         .await
     {
-        Ok(player) => HttpResponse::Ok().json(crate::entities::player::PlayerView::from(&player)),
+        Ok(player) => {
+            if let Some(ref c) = cache
+                && let Err(e) = cache_svc::invalidate_player(c.get_ref().clone(), &public_id).await
+            {
+                tracing::warn!(error = %e, "cache invalidation failed after update");
+            }
+            HttpResponse::Ok().json(PlayerView::from(&player))
+        }
         Err(PlayerServiceError::NotFound) => {
             HttpResponse::NotFound().json(error_body("player not found"))
         }
@@ -102,14 +149,17 @@ async fn update_player(
     }
 }
 
+// ── DELETE /players/{id} ──────────────────────────────────────────────────────
+
 /// Soft-delete the authenticated player's own account.
 ///
-/// Sets `status = 'deleted'` — the row is retained for FK integrity and will
-/// no longer appear in any service query. Returns 204 on success.
-#[tracing::instrument(skip(pool, user))]
+/// Sets `status = 'deleted'` — the row is retained for FK integrity. Returns
+/// 204 on success. Invalidates the Redis cache entry on success.
+#[tracing::instrument(skip(pool, cache, user))]
 async fn delete_player(
     path: web::Path<String>,
     pool: Option<web::Data<MySqlPool>>,
+    cache: Option<web::Data<ConnectionManager>>,
     user: AuthenticatedUser,
 ) -> HttpResponse {
     let Some(pool) = pool else {
@@ -118,7 +168,14 @@ async fn delete_player(
     let public_id = path.into_inner();
     match players_svc::soft_delete_player(pool.get_ref(), &public_id, &user.player_public_id).await
     {
-        Ok(()) => HttpResponse::NoContent().finish(),
+        Ok(()) => {
+            if let Some(ref c) = cache
+                && let Err(e) = cache_svc::invalidate_player(c.get_ref().clone(), &public_id).await
+            {
+                tracing::warn!(error = %e, "cache invalidation failed after delete");
+            }
+            HttpResponse::NoContent().finish()
+        }
         Err(PlayerServiceError::NotFound) => {
             HttpResponse::NotFound().json(error_body("player not found"))
         }
@@ -132,9 +189,91 @@ async fn delete_player(
     }
 }
 
-/// Placeholder — subaccount creation is implemented in task 0.2-8.
-async fn create_player() -> HttpResponse {
-    HttpResponse::NotImplemented().json(error_body("subaccount creation not yet implemented"))
+// ── POST /players/subaccount ──────────────────────────────────────────────────
+
+/// Request body for creating a subaccount under the authenticated player.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSubaccountRequest {
+    /// Username for the new subaccount.
+    #[validate(length(min = 3, max = 64))]
+    pub username: String,
+    /// Optional email for the new subaccount.
+    #[validate(email)]
+    pub email: Option<String>,
+    /// Password for the new subaccount.
+    #[validate(length(min = 8, max = 1024))]
+    pub password: String,
+}
+
+/// Create a new subaccount linked to the authenticated player as its parent.
+///
+/// The parent relationship is inferred from the JWT — callers cannot specify
+/// an arbitrary parent. Returns 201 with the new subaccount's [`PlayerView`].
+#[tracing::instrument(skip(pool, user))]
+async fn create_subaccount(
+    pool: Option<web::Data<MySqlPool>>,
+    user: AuthenticatedUser,
+    body: web::Json<CreateSubaccountRequest>,
+) -> HttpResponse {
+    if let Err(e) = body.validate() {
+        return HttpResponse::BadRequest().json(error_body(&format!("validation: {e}")));
+    }
+    let Some(pool) = pool else {
+        return HttpResponse::ServiceUnavailable().json(error_body("database unavailable"));
+    };
+    let input = NewPlayer {
+        username: &body.username,
+        email: body.email.as_deref(),
+        password_plain: &body.password,
+        parent_account_public_id: Some(&user.player_public_id),
+    };
+    match players_svc::create_player(pool.get_ref(), input).await {
+        Ok(p) => {
+            let mut view = PlayerView::from(&p);
+            view.parent_account_id = Some(user.player_public_id.clone());
+            HttpResponse::Created().json(view)
+        }
+        Err(PlayerServiceError::Duplicate) => {
+            HttpResponse::Conflict().json(error_body("username or email already taken"))
+        }
+        Err(PlayerServiceError::Invalid(msg)) => HttpResponse::BadRequest().json(error_body(&msg)),
+        Err(e) => {
+            tracing::error!(error = ?e, "create_subaccount failed");
+            HttpResponse::InternalServerError().json(error_body("internal error"))
+        }
+    }
+}
+
+// ── GET /players/{id}/subaccounts ─────────────────────────────────────────────
+
+/// List all non-deleted subaccounts for the given parent player.
+///
+/// Only the authenticated player may list their own subaccounts (403 for
+/// cross-account requests). Returns an empty array when no subaccounts exist.
+#[tracing::instrument(skip(pool, user))]
+async fn list_subaccounts(
+    path: web::Path<String>,
+    pool: Option<web::Data<MySqlPool>>,
+    user: AuthenticatedUser,
+) -> HttpResponse {
+    let Some(pool) = pool else {
+        return HttpResponse::ServiceUnavailable().json(error_body("database unavailable"));
+    };
+    let parent_id = path.into_inner();
+    match players_svc::find_subaccounts(pool.get_ref(), &parent_id, &user.player_public_id).await {
+        Ok(views) => HttpResponse::Ok().json(views),
+        Err(PlayerServiceError::NotFound) => {
+            HttpResponse::NotFound().json(error_body("player not found"))
+        }
+        Err(PlayerServiceError::Forbidden) => {
+            HttpResponse::Forbidden().json(error_body("you may only view your own subaccounts"))
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "list_subaccounts failed");
+            HttpResponse::InternalServerError().json(error_body("internal error"))
+        }
+    }
 }
 
 fn error_body(msg: &str) -> serde_json::Value {
@@ -219,7 +358,6 @@ mod tests {
 
     #[actix_web::test]
     async fn update_player_rejects_short_username() {
-        // Validation fires before pool check, so no pool needed for a 400.
         let token = valid_token("player-uuid-1");
         let app = test::init_service(
             App::new()
@@ -230,7 +368,7 @@ mod tests {
         let req = test::TestRequest::put()
             .uri("/players/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
-            .set_json(serde_json::json!({"username": "ab"})) // < 3 chars
+            .set_json(serde_json::json!({"username": "ab"}))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -300,6 +438,94 @@ mod tests {
         .await;
         let req = test::TestRequest::delete()
             .uri("/players/player-uuid-1")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── POST /players/subaccount ───────────────────────────────────────────
+
+    #[actix_web::test]
+    async fn create_subaccount_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/players/subaccount")
+            .set_json(serde_json::json!({"username": "child", "password": "pass12345"}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn create_subaccount_rejects_short_password() {
+        let token = valid_token("parent-uuid");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/players/subaccount")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({"username": "child", "password": "short"}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn create_subaccount_without_pool_returns_503() {
+        let token = valid_token("parent-uuid");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/players/subaccount")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({"username": "child", "password": "pass12345678"}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── GET /players/{id}/subaccounts ──────────────────────────────────────
+
+    #[actix_web::test]
+    async fn list_subaccounts_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/players/parent-uuid/subaccounts")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn list_subaccounts_without_pool_returns_503() {
+        let token = valid_token("parent-uuid");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/players/parent-uuid/subaccounts")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;

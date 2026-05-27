@@ -6,7 +6,7 @@
 //! `public_id` (UUID) instead.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 /// Lifecycle state for a player row. Mapped to the MySQL ENUM column.
@@ -17,7 +17,7 @@ use sqlx::FromRow;
 /// We implement `Type` and `Decode` manually because MySQL returns ENUM
 /// columns as text at the wire level; the derive macro's `type_name = "ENUM"`
 /// hint does not survive sqlx's type-compatibility check on MySQL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PlayerStatus {
     Active,
@@ -72,7 +72,7 @@ pub struct Player {
 ///
 /// Critically omits `id` and `password_hash`; surfaces `public_id` as `id`
 /// to external consumers.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerView {
     pub id: String,
     pub username: String,

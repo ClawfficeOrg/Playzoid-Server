@@ -84,7 +84,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 | # | Task | Complexity | Agent |
 |---|------|------------|-------|
 | 0.2-1 | Implement `POST /auth/login` — validate credentials, issue JWT | medium | sonnet |
-| 0.2-2 | 🔄 in-progress | medium | sonnet |
+| 0.2-2 | Implement JWT Bearer auth middleware extractor (`AuthenticatedUser`) | medium | sonnet |
 | 0.2-3 | Implement `POST /auth/register` — create new player account | medium | sonnet |
 | 0.2-4 | Implement `GET /players/{id}` with auth guard | small | nemotron |
 | 0.2-5 | Implement `PUT /players/{id}` — update player profile | small | nemotron |
@@ -108,10 +108,10 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 | 0.2-5 | ✅ done       | `PUT /players/{id}` own-account update with validation |
 | 0.2-6 | ✅ done       | `DELETE /players/{id}` soft-delete (status=deleted, deleted_at) |
 | 0.2-7 | ✅ verified   | `parent_account_id` FK already in `migrations/20260501000001_create_players.up.sql` (R-8, PR #9). No additional migration needed — see `docs/RECOVERY_PLAN.md` §3. |
-| 0.2-8 | ⏳ pending    | depends on 0.2-3, 0.2-7 |
-| 0.2-9 | ⏳ pending    | depends on 0.2-7 |
-| 0.2-10 | ⏳ pending   | depends on 0.2-2 |
-| 0.2-11 | 🟡 partial    | auth-service unit tests landed with PR #11 (`src/services/auth.rs::tests`); endpoint tests follow with 0.2-1..0.2-3 |
+| 0.2-8 | ✅ done       | `POST /players/subaccount` — creates subaccount under authenticated parent |
+| 0.2-9 | ✅ done       | `GET /players/{id}/subaccounts` — lists own subaccounts (own account only) |
+| 0.2-10 | ✅ done      | Redis `ConnectionManager` wired; player view cached on login/GET, invalidated on PUT/DELETE |
+| 0.2-11 | ✅ done       | auth service tests (PR #11) + middleware tests (PR #14) + API-layer tests for all player endpoints |
 | 0.2-12 | ⏳ pending   | depends on 0.2-1..0.2-9 |
 | 0.2-13 | ⏳ pending   | depends on 0.2-1..0.2-10 |
 

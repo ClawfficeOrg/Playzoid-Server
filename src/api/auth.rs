@@ -9,8 +9,10 @@
 use crate::config::Config;
 use crate::entities::player::PlayerView;
 use crate::services::auth as auth_svc;
+use crate::services::cache as cache_svc;
 use crate::services::players::{self as players_svc, NewPlayer, PlayerServiceError};
 use actix_web::{HttpResponse, web};
+use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use validator::Validate;
@@ -90,6 +92,7 @@ async fn register(
 async fn login(
     pool: Option<web::Data<MySqlPool>>,
     cfg: web::Data<Config>,
+    cache: Option<web::Data<ConnectionManager>>,
     body: web::Json<LoginRequest>,
 ) -> HttpResponse {
     let Some(pool) = pool else {
@@ -102,11 +105,26 @@ async fn login(
     match players_svc::verify_credentials(pool.get_ref(), &body.username, &body.password).await {
         Ok(Some(p)) => {
             match auth_svc::issue_jwt(&cfg.jwt_secret, &p.public_id, cfg.jwt_expiry_secs) {
-                Ok(token) => HttpResponse::Ok().json(LoginResponse {
-                    token,
-                    expires_in: cfg.jwt_expiry_secs,
-                    player: PlayerView::from(&p),
-                }),
+                Ok(token) => {
+                    let view = PlayerView::from(&p);
+                    // Populate cache on successful login — best effort.
+                    if let Some(ref c) = cache
+                        && let Err(e) = cache_svc::set_player_view(
+                            c.get_ref().clone(),
+                            &p.public_id,
+                            &view,
+                            cfg.jwt_expiry_secs,
+                        )
+                        .await
+                    {
+                        tracing::warn!(error = %e, "cache set failed on login");
+                    }
+                    HttpResponse::Ok().json(LoginResponse {
+                        token,
+                        expires_in: cfg.jwt_expiry_secs,
+                        player: view,
+                    })
+                }
                 Err(e) => {
                     tracing::error!(error = ?e, "issue_jwt failed");
                     HttpResponse::InternalServerError().json(error_body("internal error"))

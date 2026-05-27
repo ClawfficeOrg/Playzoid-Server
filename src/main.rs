@@ -33,8 +33,7 @@ async fn main() -> std::io::Result<()> {
 
     let cfg_data = web::Data::new(cfg.clone());
 
-    // Build the DB pool. We surface a friendly error but don't gate on a successful
-    // initial query — the pool will reconnect lazily.
+    // Build the DB pool — degraded mode if unavailable.
     let pool = match db::build_pool(&cfg.database_url).await {
         Ok(p) => {
             info!("Database pool initialised");
@@ -42,6 +41,24 @@ async fn main() -> std::io::Result<()> {
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to initialise DB pool; continuing in degraded mode");
+            None
+        }
+    };
+
+    // Build the Redis connection manager — caching disabled if unavailable.
+    let redis_mgr = match redis::Client::open(cfg.redis_url.as_str()) {
+        Ok(client) => match redis::aio::ConnectionManager::new(client).await {
+            Ok(mgr) => {
+                info!("Redis connection manager initialised");
+                Some(mgr)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to connect to Redis; caching disabled");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "Invalid Redis URL; caching disabled");
             None
         }
     };
@@ -59,6 +76,9 @@ async fn main() -> std::io::Result<()> {
             .route("/ws", web::get().to(sockets::ws::ws_index));
         if let Some(p) = pool.clone() {
             app = app.app_data(web::Data::new(p));
+        }
+        if let Some(r) = redis_mgr.clone() {
+            app = app.app_data(web::Data::new(r));
         }
         app
     })
