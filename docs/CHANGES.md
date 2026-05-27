@@ -2,6 +2,18 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-05-27 — Ralph autonomous task loop
+
+### Added
+- `AGENTS.md` — agent instruction file: required reading, branching model, code quality rules, security requirements, PR requirements, TODO status markers.
+- `skills/ralph.md` — autonomous task agent skill document, adapted for the Playzoid-Server PR-based workflow (no auto-merge; opens PRs for human review).
+- `scripts/ralph.sh` — POSIX shell task loop: parses `docs/TODO.md` table format, creates `task/<phase>-<num>` branches, invokes copilot, runs the three-check gate (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`) with 3-attempt retry, commits + pushes, opens PR via `gh pr create`, marks task `📬 PR #<n>` in TODO.md, and logs to `docs/ralph-log.md`. Supports `--minutes`, `--hours`, `--loop`, single-task, and graceful-stop modes.
+- `scripts/ralph.ps1` — PowerShell 5.1+ port of `ralph.sh` for Windows (and pwsh anywhere).
+- `tests/ralph/ralph.tests.ps1` — Pester test suite for `ralph.ps1` helper logic: 30 tests covering `Get-NextTask`, `Get-CurrentPhase`, `Get-TaskPhase`, `Get-TaskDefinitionRow`, argument parsing, task-id format validation, and `ralph.ps1` syntax.
+- `docs/ralph-log.md` — append-only timestamped log for the ralph agent.
+
+---
+
 ## [Unreleased] — 2026-04-30 — Phase 0.2 opens
 
 ### Added

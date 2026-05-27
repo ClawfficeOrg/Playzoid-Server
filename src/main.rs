@@ -31,6 +31,8 @@ async fn main() -> std::io::Result<()> {
 
     let bind = cfg.bind_addr();
 
+    let cfg_data = web::Data::new(cfg.clone());
+
     // Build the DB pool. We surface a friendly error but don't gate on a successful
     // initial query — the pool will reconnect lazily.
     let pool = match db::build_pool(&cfg.database_url).await {
@@ -49,6 +51,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         let mut app = App::new()
             .wrap(TracingLogger::default())
+            .app_data(cfg_data.clone())
             .configure(api::healthz::config)
             .configure(api::auth::config)
             .configure(api::players::config)
