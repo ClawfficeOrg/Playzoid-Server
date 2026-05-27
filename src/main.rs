@@ -1,16 +1,7 @@
 use actix_web::{App, HttpServer, web};
+use playzoid_server::{api, config::Config, db, sockets};
 use tracing::info;
 use tracing_actix_web::TracingLogger;
-
-mod api;
-mod config;
-mod db;
-mod entities;
-mod middleware;
-mod services;
-mod sockets;
-
-use config::Config;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -30,7 +21,6 @@ async fn main() -> std::io::Result<()> {
     })?;
 
     let bind = cfg.bind_addr();
-
     let cfg_data = web::Data::new(cfg.clone());
 
     // Build the DB pool — degraded mode if unavailable.
