@@ -2,7 +2,21 @@
 
 # CHANGES.md
 
-## [Unreleased] — 2026-05-27 — Phase 0.2 player CRUD (tasks 0.2-4, 0.2-5, 0.2-6)
+## [Unreleased] — 2026-05-27 — Phase 0.2 subaccounts + Redis cache (tasks 0.2-8, 0.2-9, 0.2-10)
+
+### Added
+- `src/services/cache.rs` — Redis-backed player view cache: `get_player_view`, `set_player_view`, `invalidate_player`. Best-effort; callers fall back to DB on any error.
+- `src/services/players.rs` — added `find_subaccounts` (own-account guard, resolves parent public_id on each view).
+- `src/api/players.rs` — added `POST /players/subaccount` (parent from JWT, 201 with PlayerView) and `GET /players/{id}/subaccounts` (403 cross-account, empty array OK). Updated GET/PUT/DELETE to read/write/invalidate Redis cache.
+- `src/api/auth.rs` — login handler populates Redis cache on successful authentication.
+- `src/main.rs` — `redis::aio::ConnectionManager` initialised at startup and injected as optional app_data (caching gracefully disabled if Redis is unreachable).
+
+### Changed
+- `src/entities/player.rs` — `PlayerView` and `PlayerStatus` now derive `Deserialize` (required for cache deserialization).
+- `docs/TODO.md` — fixed corrupted 0.2-2 task definition row; marked 0.2-8 through 0.2-11 done.
+
+---
+
 
 ### Changed
 - `src/api/players.rs` — replaced stub handlers with real DB-backed implementations:

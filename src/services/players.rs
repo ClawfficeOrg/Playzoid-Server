@@ -304,6 +304,57 @@ fn is_unique_violation(err: &dyn sqlx::error::DatabaseError) -> bool {
             .contains("duplicate entry")
 }
 
+/// List all non-deleted subaccounts belonging to `parent_public_id`.
+///
+/// Only the owning player (matching `requesting_player_id`) may list their
+/// own subaccounts. Returns an empty `Vec` when the player has no subaccounts.
+pub async fn find_subaccounts(
+    pool: &MySqlPool,
+    parent_public_id: &str,
+    requesting_player_id: &str,
+) -> Result<Vec<PlayerView>, PlayerServiceError> {
+    if parent_public_id != requesting_player_id {
+        return Err(PlayerServiceError::Forbidden);
+    }
+
+    // Resolve parent public_id → internal id (also validates the parent exists).
+    let row: Option<(u64,)> =
+        sqlx::query_as("SELECT id FROM players WHERE public_id = ? AND status <> 'deleted'")
+            .bind(parent_public_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(PlayerServiceError::Database)?;
+
+    let Some((parent_id,)) = row else {
+        return Err(PlayerServiceError::NotFound);
+    };
+
+    let players = sqlx::query_as::<_, Player>(
+        r#"
+        SELECT id, public_id, username, email, password_hash,
+               parent_account_id, status, created_at, updated_at, deleted_at
+        FROM players
+        WHERE parent_account_id = ? AND status <> 'deleted'
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_all(pool)
+    .await
+    .map_err(PlayerServiceError::Database)?;
+
+    let views = players
+        .iter()
+        .map(|p| {
+            let mut view = PlayerView::from(p);
+            view.parent_account_id = Some(parent_public_id.to_owned());
+            view
+        })
+        .collect();
+
+    Ok(views)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +404,26 @@ mod tests {
     async fn soft_delete_same_account_proceeds_to_db() {
         let pool = fake_pool();
         let result = soft_delete_player(&pool, "player-A", "player-A").await;
+        assert!(
+            !matches!(result, Err(PlayerServiceError::Forbidden)),
+            "should not return Forbidden for own account"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_subaccounts_rejects_cross_account() {
+        let pool = fake_pool();
+        let result = find_subaccounts(&pool, "player-A", "player-B").await;
+        assert!(
+            matches!(result, Err(PlayerServiceError::Forbidden)),
+            "expected Forbidden, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_subaccounts_same_account_proceeds_to_db() {
+        let pool = fake_pool();
+        let result = find_subaccounts(&pool, "player-A", "player-A").await;
         assert!(
             !matches!(result, Err(PlayerServiceError::Forbidden)),
             "should not return Forbidden for own account"
