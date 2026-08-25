@@ -2,6 +2,15 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — Update leaderboard entry (task 0.3-4)
+
+### Added
+- `PUT /leaderboards/{game_id}/entries/{player_id}` — auth-gated score update. `{player_id}` must match the JWT identity (403 otherwise); entry must already exist (404; use POST to create). Body `{ "score": i64, "props": [..]? }` — omitted props keep their current value. Returns 200 with `{ playerId, score, rank, props? }`, rank recomputed.
+- `src/services/leaderboards.rs` — added `update_entry`, `EntryNotFound` / `Forbidden` error variants; extracted shared `validate_props`, `resolve_board_and_player`, `compute_rank` helpers now reused by POST and PUT.
+- `tests/leaderboards_integration.rs` — 5 new integration tests (auth required, cross-player 403, missing entry 404, score update recomputes rank + verified via GET, props preserved when omitted / replaced when supplied).
+
+---
+
 ## [Unreleased] — 2026-08-25 — Submit leaderboard score (task 0.3-3)
 
 ### Added
