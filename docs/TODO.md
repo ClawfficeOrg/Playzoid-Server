@@ -166,7 +166,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 
 | #     | Status        | Evidence |
 |-------|---------------|----------|
-| 0.3-1 | 📬 PR #16     | `migrations/20260825000001_create_leaderboards.{up,down}.sql` — leaderboards + leaderboard_entries tables; verified up/down against Docker dev stack |
+| 0.3-1 | 📬 PR #15     | `migrations/20260825000001_create_leaderboards.{up,down}.sql` — leaderboards + leaderboard_entries tables; verified up/down against Docker dev stack |
 | 0.3-2 | ⏳ pending    | |
 | 0.3-3 | ⏳ pending    | |
 | 0.3-4 | ⏳ pending    | |
