@@ -272,3 +272,168 @@ async fn get_leaderboard_rejects_invalid_pagination() {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "query {q}");
     }
 }
+
+// ── POST /leaderboards/{game_id}/entries ──────────────────────────────────────
+
+macro_rules! leaderboard_app {
+    ($pool:expr, $mgr:expr, $cfg:expr) => {
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new($cfg))
+                .app_data(web::Data::new($pool))
+                .app_data(web::Data::new($mgr))
+                .configure(api::leaderboards::config),
+        )
+        .await
+    };
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_requires_auth() {
+    let (pool, _mgr, cfg) = test_fixtures().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool))
+            .configure(api::leaderboards::config),
+    )
+    .await;
+    let req = test::TestRequest::post()
+        .uri("/leaderboards/any-board/entries")
+        .set_json(serde_json::json!({ "score": 100 }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_unknown_board_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+    let req = test::TestRequest::post()
+        .uri("/leaderboards/no-such-board-xyz/entries")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 100 }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_returns_201_with_rank_and_props() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/leaderboards/{board}/entries"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({
+            "score": 1234,
+            "props": [{"key": "level", "value": "3"}]
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert!(body["playerId"].is_string());
+    assert_eq!(body["score"], 1234);
+    assert_eq!(body["rank"], 1);
+    assert_eq!(
+        body["props"],
+        serde_json::json!([{"key": "level", "value": "3"}])
+    );
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_duplicate_player_returns_409() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    let username = unique_username();
+    let (pid, token) = register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &username).await;
+
+    // First submission seeded directly; the endpoint call must then hit the
+    // unique constraint.
+    seed_entry(&pool, &board, &pid, 100).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/leaderboards/{board}/entries"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 200 }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submitted_entries_appear_ranked_in_get_leaderboard() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    let user_a = unique_username();
+    let user_b = unique_username();
+    let (_, token_a) = register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &user_a).await;
+    let (_, token_b) = register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &user_b).await;
+
+    let app = leaderboard_app!(pool, mgr, cfg);
+    for (token, score) in [(&token_a, 50i64), (&token_b, 500)] {
+        let req = test::TestRequest::post()
+            .uri(&format!("/leaderboards/{board}/entries"))
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({ "score": score }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/leaderboards/{board}"))
+        .insert_header(("Authorization", format!("Bearer {token_a}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["rank"], 1);
+    assert_eq!(entries[0]["score"], 500);
+    assert_eq!(entries[1]["rank"], 2);
+    assert_eq!(entries[1]["score"], 50);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_rejects_invalid_props() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/leaderboards/{board}/entries"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 10, "props": {"not": "array"} }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
