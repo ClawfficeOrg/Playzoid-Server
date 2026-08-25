@@ -2,6 +2,17 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — GET leaderboard endpoint (task 0.3-2)
+
+### Added
+- `GET /leaderboards/{game_id}` — auth-gated, paginated top scores. `game_id` is the leaderboard's `internal_name`. Query params: `page` (>=1, default 1), `per_page` (1..=100, default 50). Response: `{ "entries": [{ "playerId", "score", "rank" }] }` (camelCase per Talo shape); ranks are 1-based and continue across pages; deleted/suspended players excluded from rankings.
+- `src/entities/leaderboard.rs` — `Leaderboard` row type + `LeaderboardEntryView` / `LeaderboardResponse` projections.
+- `src/services/leaderboards.rs` — `find_by_game_id`, `top_entries` with pagination validation and bounds.
+- `src/api/leaderboards.rs` — handler + route config + API-layer tests.
+- `tests/leaderboards_integration.rs` — 5 integration tests (auth required, 404 unknown board, descending rank order, cross-page rank continuity, invalid pagination) against Docker dev stack.
+
+---
+
 ## [Unreleased] — 2026-08-25 — Leaderboard schema (task 0.3-1)
 
 ### Added
