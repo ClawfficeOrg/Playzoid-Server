@@ -9,7 +9,7 @@ These instructions apply to every agent working in this repository.
 Before starting any task, read:
 
 - [`docs/GUIDELINES.md`](docs/GUIDELINES.md) — code standards, CI, branching and PR rules
-- [`docs/TODO.md`](docs/TODO.md) — phased task list with per-task status tracking
+- [`docs/todo.md`](docs/todo.md) — master todo index (versioned todo files live alongside it)
 - [`docs/RECOVERY_PLAN.md`](docs/RECOVERY_PLAN.md) — recovery context and per-task loop contract
 - [`memory/projects/playzoid-server/project.md`](memory/projects/playzoid-server/project.md) — architectural decision log
 
@@ -32,7 +32,7 @@ All work goes through PRs against `main`. Never push directly to `main`.
 | Refactor        | `refactor/<scope>/<description>`                 |
 | Docs            | `docs/<description>`                             |
 | Chore / tooling | `chore/<description>`                            |
-| Ralph tasks     | `task/<phase>-<num>` (e.g. `task/0.2-1`)         |
+| Ralph tasks     | `task/vX.Y.Z` (e.g. `task/v0.3.5`)               |
 
 **Never self-approve or auto-merge PRs you authored.** All PRs require CI green
 plus at least one human reviewer before merge.
@@ -47,7 +47,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 <type>(<scope>): <short description>
 
 [optional body]
-[optional footer(s): e.g. "Closes task 0.2-1"]
+[optional footer(s): e.g. "Closes task 0.3.5"]
 ```
 
 Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`, `perf`
@@ -100,8 +100,8 @@ Every implementation task must also:
 
 Every PR description (whether opened by ralph or by a human) must include:
 
-- `Closes task <id>` (e.g. `Closes task 0.2-1`)
-- The acceptance criteria from `docs/TODO.md` with each item checked
+- `Closes task <id>` (e.g. `Closes task 0.3.5`)
+- The acceptance criteria from the task block in `docs/todo-v<N>.md` with each item checked
 - `cargo test` output (last 20 lines)
 - For WS or load-sensitive changes: load test results
 
@@ -112,20 +112,24 @@ Every PR description (whether opened by ralph or by a human) must include:
 After completing any task:
 
 - Update `docs/CHANGES.md` with a brief changelog entry.
-- Append a decision entry to `memory/projects/playzoid-server/project.md` if
-  an architectural choice was made.
-- Update the task status in `docs/TODO.md` (see format below).
+- Append a decision entry to `docs/memory.md` if an architectural choice was
+  made, and a learning to `docs/learnings.md` if there is a durable lesson.
+- Mark the task `- [x]` in its `docs/todo-v<N>.md` file.
 
-### TODO.md Status Markers
+### Todo conventions
 
-| Marker             | Meaning                                        |
-|--------------------|------------------------------------------------|
-| `⏳ pending`       | Not yet started — ralph will pick this up      |
-| `🔄 in-progress`  | Branch created; work in flight                 |
-| `📬 PR #<n>`       | Branch pushed; PR open; awaiting human merge   |
-| `🟡 partial`       | Partially complete; more work needed           |
-| `✅ done`          | Complete and merged                            |
-| `✅ verified`      | Pre-existing; verified correct during recovery |
+Tasks use semver ids `X.Y.Z` (`Y` = release line, `Z` = task number):
+
+```
+- [ ] `0.3.5` Task title
+  Complexity: Small
+  Agent: basic_dev_agent
+```
+
+- `[ ]` open — ralph will pick it up; `[x]` done and merged.
+- One release line per `release/vX.Y` branch; one `task/vX.Y.Z` branch per task.
+- On line completion: review → merge → tag `vX.Y.0` → bump project version.
+- Lines where Y = 0 need an RC tag + human sign-off before merge.
 
 ---
 

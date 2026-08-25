@@ -7,7 +7,7 @@
 > for the next stretch of work and is structured so that a Superpowers/Ralph
 > loop can execute it autonomously (one task = one PR = one loop iteration).
 >
-> **Authoritative roadmap remains** `docs/TODO.md`. This file just sequences
+> **Authoritative roadmap remains** `docs/todo.md` + `docs/todo-v0.md`. This file just sequences
 > the recovery + finishes Phase 0.1 + opens Phase 0.2 cleanly.
 
 ---
@@ -68,7 +68,7 @@ expanding scope.
 
 ---
 
-## 2. Finish Phase 0.1 properly (TODO.md 0.1.0)
+## 2. Finish Phase 0.1 properly (todo-v0 Phase 0.1)
 
 ### R-4  Complete Cargo.toml dependencies (TODO 0.1-1)
 - **branch:** `chore/deps/phase-0.1-complete`
