@@ -24,6 +24,15 @@
 
 ---
 
+## [Unreleased] — 2026-08-25 — Leaderboard schema (task 0.3-1)
+
+### Added
+- `migrations/20260825000001_create_leaderboards.up.sql` — `leaderboards` table (unique `internal_name`) and `leaderboard_entries` table (one row per player per leaderboard via unique `(leaderboard_id, player_id)`, JSON `props`, ranking index `(leaderboard_id, score DESC)`, FKs to `leaderboards`/`players` with ON DELETE CASCADE).
+- `migrations/20260825000001_create_leaderboards.down.sql` — reversible drop.
+- `docs/TODO.md` — marked task 0.3-1 as PR open.
+
+---
+
 ## [Unreleased] — 2026-05-27 — API documentation (task 0.2-13)
 
 ### Changed
