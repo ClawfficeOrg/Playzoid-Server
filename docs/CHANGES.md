@@ -2,6 +2,15 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — Game saves schema (task 0.3.5)
+
+### Added
+- `migrations/20260825000002_create_game_saves.up.sql` — `game_saves` table: `public_id` (UUID, externally addressed), `player_id` FK with ON DELETE CASCADE, `name`, JSON `save` blob (NOT NULL), optional JSON `metadata`, timestamps.
+- `migrations/20260825000002_create_game_saves.down.sql` — reversible drop.
+- `docs/todo-v0.md` — task 0.3.5 marked done under the new semver id scheme.
+
+---
+
 ## [Unreleased] — 2026-08-25 — Update leaderboard entry (task 0.3-4)
 
 ### Added
