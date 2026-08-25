@@ -1,7 +1,8 @@
 //! `/leaderboards` HTTP endpoints.
 //!
-//! `GET  /leaderboards/{game_id}`          — paginated top scores (auth required).
-//! `POST /leaderboards/{game_id}/entries`  — submit a score (auth required).
+//! `GET  /leaderboards/{game_id}`                       — paginated top scores (auth required).
+//! `POST /leaderboards/{game_id}/entries`               — submit a score (auth required).
+//! `PUT  /leaderboards/{game_id}/entries/{player_id}`   — update own score (auth required).
 //! `game_id` is the leaderboard's route identifier (`internal_name`).
 
 use crate::middleware::auth::AuthenticatedUser;
@@ -16,6 +17,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/leaderboards")
             .route("/{game_id}/entries", web::post().to(submit_entry))
+            .route(
+                "/{game_id}/entries/{player_id}",
+                web::put().to(update_entry),
+            )
             .route("/{game_id}", web::get().to(get_leaderboard)),
     );
 }
@@ -149,6 +154,90 @@ async fn submit_entry(
         }
         Err(e) => {
             tracing::error!(error = ?e, "submit_entry failed");
+            HttpResponse::InternalServerError().json(error_body("internal error"))
+        }
+    }
+}
+
+// ── PUT /leaderboards/{game_id}/entries/{player_id} ───────────────────────────
+
+/// Update the authenticated player's own score on a leaderboard.
+///
+/// The `{player_id}` path segment must match the JWT identity — cross-player
+/// updates return 403. The entry must already exist (404 otherwise; use the
+/// POST endpoint to create one). Omitted `props` keep their current value.
+///
+/// Returns 200 with the updated entry including its recomputed rank, 400 for
+/// invalid bodies, 404 for unknown leaderboards or missing entries, 403 for
+/// cross-player attempts.
+#[tracing::instrument(skip(pool, user))]
+async fn update_entry(
+    path: web::Path<(String, String)>,
+    pool: Option<web::Data<MySqlPool>>,
+    user: AuthenticatedUser,
+    body: web::Json<SubmitScoreRequest>,
+) -> HttpResponse {
+    // Validate props before the pool check so 400 wins over 503.
+    if let Some(props) = body.props.as_ref()
+        && (!props.is_array()
+            || serde_json::to_string(props)
+                .map(|s| s.len() > MAX_PROPS_BYTES)
+                .unwrap_or(true))
+    {
+        return HttpResponse::BadRequest().json(error_body(
+            "props must be a JSON array within the size limit",
+        ));
+    }
+    let (game_id, player_id) = path.into_inner();
+
+    // Ownership check before any DB access so cross-player requests fail fast.
+    if player_id != user.player_public_id {
+        return HttpResponse::Forbidden().json(error_body(
+            "you may only update your own leaderboard entries",
+        ));
+    }
+
+    let Some(pool) = pool else {
+        return HttpResponse::ServiceUnavailable().json(error_body("database unavailable"));
+    };
+
+    match leaderboards_svc::update_entry(
+        pool.get_ref(),
+        &game_id,
+        &player_id,
+        &user.player_public_id,
+        body.score,
+        body.props.clone(),
+    )
+    .await
+    {
+        Ok(view) => {
+            let mut resp = serde_json::json!({
+                "playerId": view.player_id,
+                "score": view.score,
+                "rank": view.rank,
+            });
+            if let Some(props) = body.props.as_ref() {
+                resp["props"] = props.clone();
+            }
+            HttpResponse::Ok().json(resp)
+        }
+        Err(LeaderboardServiceError::Forbidden) => HttpResponse::Forbidden().json(error_body(
+            "you may only update your own leaderboard entries",
+        )),
+        Err(LeaderboardServiceError::EntryNotFound) => HttpResponse::NotFound()
+            .json(error_body("no entry for this player on this leaderboard")),
+        Err(LeaderboardServiceError::NotFound) => {
+            HttpResponse::NotFound().json(error_body("leaderboard not found"))
+        }
+        Err(LeaderboardServiceError::PlayerNotFound) => {
+            HttpResponse::NotFound().json(error_body("player not found"))
+        }
+        Err(LeaderboardServiceError::Invalid(msg)) => {
+            HttpResponse::BadRequest().json(error_body(&msg))
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "update_entry failed");
             HttpResponse::InternalServerError().json(error_body("internal error"))
         }
     }
@@ -332,6 +421,79 @@ mod tests {
             .uri("/leaderboards/game-highscores/entries")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"score": 100, "props": {"not": "array"}}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── PUT /leaderboards/{game_id}/entries/{player_id} ────────────────────
+
+    #[actix_web::test]
+    async fn update_entry_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::put()
+            .uri("/leaderboards/game-highscores/entries/player-uuid-1")
+            .set_json(serde_json::json!({"score": 200}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn update_entry_without_pool_returns_503() {
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::put()
+            .uri("/leaderboards/game-highscores/entries/player-uuid-1")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({"score": 200}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[actix_web::test]
+    async fn update_entry_cross_player_returns_403() {
+        // Ownership check runs before any SQL — fake pool never connects.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::put()
+            .uri("/leaderboards/game-highscores/entries/player-uuid-2")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({"score": 200}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn update_entry_rejects_non_array_props() {
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::put()
+            .uri("/leaderboards/game-highscores/entries/player-uuid-1")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({"score": 200, "props": {"not": "array"}}))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
