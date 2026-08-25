@@ -168,7 +168,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 |-------|---------------|----------|
 | 0.3-1 | ⏳ pending    | |
 | 0.3-2 | 📬 PR #16     | `GET /leaderboards/{game_id}` — paginated top scores (`src/api/leaderboards.rs`, `src/services/leaderboards.rs`); 5 API-layer tests + 5 live integration tests pass |
-| 0.3-3 | 📬 PR         | `POST /leaderboards/{game_id}/entries` — submit score from JWT identity; 409 on duplicate; 4 API tests + 2 service tests + 6 live integration tests pass |
+| 0.3-3 | 📬 PR #17     | `POST /leaderboards/{game_id}/entries` — submit score from JWT identity; 409 on duplicate; 4 API tests + 2 service tests + 6 live integration tests pass |
 | 0.3-4 | ⏳ pending    | |
 | 0.3-5 | ⏳ pending    | |
 | 0.3-6 | ⏳ pending    | |
