@@ -1,48 +1,145 @@
-#!/bin/sh
-# ralph — autonomous task loop for the Playzoid-Server repository.
+#!/bin/bash
+# ralph — autonomous task loop (generic baseline, semver task ids).
+#
+# Adapted for this repository. The language-agnostic parts live in the
+# CONFIG block below; per-repo specialisation is done via env overrides or
+# by editing that block only. Everything else is generic.
 #
 # Usage:
-#   ./scripts/ralph.sh                     # pick next open task from main
-#   ./scripts/ralph.sh 0.2-1              # single specific task
-#   ./scripts/ralph.sh --minutes=30        # loop for up to 30 minutes
-#   ./scripts/ralph.sh --hours=2           # loop for up to 2 hours
-#   ./scripts/ralph.sh --hours=1 --minutes=30
-#   ./scripts/ralph.sh --minutes=45 0.2-4  # single task, time-bounded
-#   ./scripts/ralph.sh --loop              # keep picking tasks until none remain
-#                                           # (use only when tasks are independent)
+#   ./scripts/ralph.sh                          # multi-phase: loop through all open release lines
+#   ./scripts/ralph.sh 0.3.5                    # single task (infers release branch)
+#   ./scripts/ralph.sh --minutes=30             # loop for up to 30 minutes
+#   ./scripts/ralph.sh --hours=2                # loop for up to 2 hours
+#   ./scripts/ralph.sh --hours=1 --minutes=30   # combined time limit
+#   ./scripts/ralph.sh --until=0.3.9            # run all open tasks up to and including a task id
+#   ./scripts/ralph.sh --dry-run                # preview the next action and exit
+#   ./scripts/ralph.sh --log=/tmp/run.log       # tee everything to a file
+#   ./scripts/ralph.sh --quiet                  # suppress agent stderr
 #
-# Ralph MUST be started from the `main` branch with a clean working tree.
+# Versioning (semver):
+#   Task ids are X.Y.Z — Y = release line, Z = task number within the line.
+#   Each line gets a `release/vX.Y` branch; each task a `task/vX.Y.Z` branch.
+#   On line completion: review → merge to main → tag `vX.Y.0` → bump project
+#   version to exactly `X.Y.0`. Lines with Y = 0 are gated behind an RC tag +
+#   human sign-off (ralph never auto-merges them).
 #
-# For each open task ralph:
-#   1. Creates branch `task/<id>` from main.
-#   2. Invokes copilot with skills/ralph.md to implement the task.
-#   3. Runs cargo fmt --check, cargo clippy -D warnings, cargo test.
-#   4. Commits + pushes the task branch.
-#   5. Opens a PR via `gh pr create` (never self-merges).
-#   6. Marks the task `📬 PR #<n>` in docs/TODO.md.
-#   7. Logs to docs/ralph-log.md and exits.
+# Ralph can be started from:
+#   main            — picks up the next open release line and loops through all lines.
+#   release/vX.Y    — resumes that line, then continues through subsequent lines.
 #
-# Because tasks are typically dependent, ralph exits after each PR by default.
-# Use --loop only for phases where tasks are truly independent.
+# Stopping gracefully (finishes the current task first):
+#   touch scripts/STOP.md               # sentinel file in the repo
+#   kill -TERM $(cat /tmp/ralph.pid)    # SIGTERM to the process
+#   Ctrl-C                              # SIGINT
 #
-# Stopping ralph gracefully (finishes current task first):
-#   touch scripts/STOP.md
-#   kill -TERM $(cat /tmp/ralph.pid)
-#   Ctrl-C
-#
-# Requires: copilot CLI, gh CLI, git, cargo, a clean working tree.
-# LOCALE: must be UTF-8 to correctly match ⏳/📬/✅ emoji in docs/TODO.md.
+# Requires: an agent CLI (see AGENT block), git, a clean working tree.
 
 set -e
 
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-SKILL="$REPO_ROOT/skills/ralph.md"
-TODO="$REPO_ROOT/docs/TODO.md"
-LOG="$REPO_ROOT/docs/ralph-log.md"
-CHEAP_MODEL="${COPILOT_CHEAP_MODEL:-gpt-5-mini}"
-CODE_MODEL="${COPILOT_MODEL:-claude-sonnet-4.6}"
+cd "$REPO_ROOT"
 
-# ── colours ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# CONFIG — per-repo adaptation happens HERE only.
+# ══════════════════════════════════════════════════════════════════════════
+
+REPO_NAME="$(basename "$REPO_ROOT")"
+SKILL="${SKILL:-$REPO_ROOT/skills/ralph.md}"
+LOG="$REPO_ROOT/docs/ralph-log.md"
+TODO_GLOB='todo-v*.md'          # glob of versioned todo files under docs/
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+
+# Check commands (green gate). Override via env: FMT_CMD=... ralph.sh
+detect_checks() {
+    if [ -f Cargo.toml ]; then
+        FMT_CMD="${FMT_CMD:-cargo fmt --check}"
+        LINT_CMD="${LINT_CMD:-cargo clippy --all-targets --all-features -- -D warnings}"
+        TEST_CMD="${TEST_CMD:-cargo test}"
+        LANG_NAME="Rust"
+    elif [ -f package.json ]; then
+        FMT_CMD="${FMT_CMD:-npx prettier --check .}"
+        LINT_CMD="${LINT_CMD:-npm run lint}"
+        TEST_CMD="${TEST_CMD:-npm test}"
+        LANG_NAME="TypeScript/JavaScript"
+    elif [ -f pyproject.toml ] || [ -f setup.py ]; then
+        FMT_CMD="${FMT_CMD:-ruff format --check .}"
+        LINT_CMD="${LINT_CMD:-ruff check .}"
+        TEST_CMD="${TEST_CMD:-pytest}"
+        LANG_NAME="Python"
+    elif [ -f go.mod ]; then
+        FMT_CMD="${FMT_CMD:-gofmt -l .}"
+        LINT_CMD="${LINT_CMD:-go vet ./...}"
+        TEST_CMD="${TEST_CMD:-go test ./...}"
+        LANG_NAME="Go"
+    else
+        FMT_CMD="${FMT_CMD:-}"
+        LINT_CMD="${LINT_CMD:-}"
+        TEST_CMD="${TEST_CMD:-}"
+        LANG_NAME="unknown"
+    fi
+}
+detect_checks
+
+# Project version bump target. First match wins; empty → skip version bump.
+# Supported: Cargo.toml ([package] version), package.json ("version"),
+# pyproject.toml (project.version), VERSION plain file.
+version_bump() {
+    _ver="$1"   # e.g. 0.3.0
+    if [ -f Cargo.toml ] && grep -q '^version = ' Cargo.toml; then
+        if sed --version >/dev/null 2>&1; then
+            sed -i "s/^version = \".*\"/version = \"${_ver}\"/" Cargo.toml
+        else
+            sed -i '' "s/^version = \".*\"/version = \"${_ver}\"/" Cargo.toml
+        fi
+        git add Cargo.toml
+    elif [ -f package.json ] && command -v node >/dev/null 2>&1; then
+        node -e "const f='package.json',j=require('./'+f);j.version='${_ver}';require('fs').writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+        git add package.json
+    elif [ -f pyproject.toml ]; then
+        if sed --version >/dev/null 2>&1; then
+            sed -i "s/^version = \".*\"/version = \"${_ver}\"/" pyproject.toml
+        else
+            sed -i '' "s/^version = \".*\"/version = \"${_ver}\"/" pyproject.toml
+        fi
+        git add pyproject.toml
+    elif [ -f VERSION ]; then
+        printf '%s\n' "$_ver" > VERSION
+        git add VERSION
+    else
+        return 1
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════
+# AGENT configuration — each agent is a PROVIDER/MODEL pair.
+# Providers: opencode-go → opencode, github-copilot → copilot,
+#            claude-code → claude, kilocode → kilo
+# ══════════════════════════════════════════════════════════════════════════
+
+TASK_PLANNING_AGENT="${TASK_PLANNING_AGENT:-opencode-go/deepseek-v4-flash}"
+BASIC_DEV_AGENT="${BASIC_DEV_AGENT:-opencode-go/deepseek-v4-flash}"
+MID_DEV_AGENT="${MID_DEV_AGENT:-opencode-go/deepseek-v4-flash}"
+PRO_DEV_AGENT="${PRO_DEV_AGENT:-github-copilot/claude-sonnet-4.6}"
+TASK_REVIEW_AGENT="${TASK_REVIEW_AGENT:-opencode-go/deepseek-v4-flash}"
+RELEASE_REVIEW_AGENT="${RELEASE_REVIEW_AGENT:-github-copilot/claude-sonnet-4.6}"
+MAJOR_RELEASE_REVIEW_AGENT="${MAJOR_RELEASE_REVIEW_AGENT:-github-copilot/claude-opus-4.8}"
+ARCHITECT_AGENT="${ARCHITECT_AGENT:-github-copilot/claude-sonnet-4.6}"
+
+# Caveman mode: prepend compressed-output instructions to every prompt.
+CAVEMAN="${CAVEMAN:-0}"
+CAVEMAN_LEVEL="${CAVEMAN_LEVEL:-full}"
+
+# Merge policy:
+#   local — ralph commits/merges locally into release/vX.Y and auto-merges
+#           completed lines to main after a release review (Zoid-style).
+#   pr    — ralph pushes a task branch and opens a PR, then stops; a human
+#           reviews and merges everything (safe default for strict repos).
+MERGE_MODE="${MERGE_MODE:-local}"
+
+BASE_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+case "$BASE_BRANCH" in master) BASE_BRANCH="$DEFAULT_BRANCH" ;; esac
+
+# ── colours / logging ────────────────────────────────────────────────────────
 BOLD=$(tput bold 2>/dev/null || true)
 CYAN=$(tput setaf 6 2>/dev/null || true)
 GREEN=$(tput setaf 2 2>/dev/null || true)
@@ -55,10 +152,13 @@ good() { printf '%s\n' "${GREEN}[ralph]${RESET} $*"; }
 warn() { printf '%s\n' "${YELLOW}[ralph]${RESET} $*"; }
 die()  { printf '%s\n' "${RED}[ralph]${RESET} $*" >&2; exit 1; }
 
-# ── argument parsing ──────────────────────────────────────────────────────────
+# ── argument parsing ─────────────────────────────────────────────────────────
 SINGLE_TASK=""
+UNTIL_TASK=""
 DURATION_SECS=0
-LOOP_MODE=0
+DRY_RUN=0
+QUIET=0
+LOG_FILE="${RALPH_LOG_FILE:-}"
 
 for _arg in "$@"; do
     case "$_arg" in
@@ -72,453 +172,663 @@ for _arg in "$@"; do
             case "$_hrs" in ''|*[!0-9]*) die "--hours requires a positive integer";; esac
             DURATION_SECS=$((DURATION_SECS + _hrs * 3600))
             ;;
-        --loop)
-            LOOP_MODE=1
+        --until=*)
+            UNTIL_TASK="${_arg#--until=}"
+            [ -n "$UNTIL_TASK" ] || die "--until requires a task id (e.g. --until=0.3.9)"
+            ;;
+        --dry-run) DRY_RUN=1 ;;
+        --quiet|-q) QUIET=1 ;;
+        --log=*)
+            _logf="${_arg#--log=}"
+            [ -n "$_logf" ] || die "--log requires a file path"
+            LOG_FILE="$_logf"
             ;;
         -*)
-            die "Unknown flag: $_arg  (supported: --minutes=N  --hours=N  --loop)"
+            die "Unknown flag: $_arg  (supported: --minutes=N --hours=N --until=TASK --dry-run --quiet/-q --log=FILE)"
             ;;
         *)
-            [ -z "$SINGLE_TASK" ] || die "Too many positional arguments — only one task id is allowed"
+            [ -z "$SINGLE_TASK" ] || die "Too many positional arguments — only one task id allowed"
             SINGLE_TASK="$_arg"
             ;;
     esac
 done
 
-# Validate single-task id format: <phase>-<num>  e.g. 0.2-1, 1.0-14
-if [ -n "$SINGLE_TASK" ]; then
-    case "$SINGLE_TASK" in
-        [0-9]*.[0-9]*-[0-9]*) : ;;  # ok
-        *) die "Task id '$SINGLE_TASK' must be in format <phase>-<num> (e.g. 0.2-1)" ;;
-    esac
-fi
-
 START_TIME="$(date +%s)"
-if [ "$DURATION_SECS" -gt 0 ]; then
-    DEADLINE=$((START_TIME + DURATION_SECS))
-else
-    DEADLINE=0
+if [ "$DURATION_SECS" -gt 0 ]; then DEADLINE=$((START_TIME + DURATION_SECS)); else DEADLINE=0; fi
+
+if [ -n "$LOG_FILE" ]; then
+    touch "$LOG_FILE"
+    exec > >(tee -a "$LOG_FILE") 2>&1
 fi
 
-# ── sanity checks ─────────────────────────────────────────────────────────────
+# ── sanity checks ────────────────────────────────────────────────────────────
 [ -f "$SKILL" ] || die "skill file missing: $SKILL"
-[ -f "$TODO" ]  || die "TODO file missing: $TODO"
-command -v copilot >/dev/null 2>&1 || die "copilot CLI not found in PATH"
-command -v gh     >/dev/null 2>&1 || die "gh CLI not found in PATH (needed for PR creation)"
-command -v cargo  >/dev/null 2>&1 || die "cargo not found in PATH"
+command -v git >/dev/null 2>&1 || die "git not found in PATH"
 
-# Ralph must start from main.
-BASE_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
-[ "$BASE_BRANCH" = "main" ] || die \
-    "ralph must be started from 'main', not '${BASE_BRANCH}'.
-  git checkout main && git pull --ff-only origin main
-  ./scripts/ralph.sh"
+# Branch validation: main or release/vX.Y only.
+MINOR_VERSION=""
+case "$BASE_BRANCH" in
+    "$DEFAULT_BRANCH")
+        MINOR_VERSION=""
+        ;;
+    release/v*)
+        MINOR_VERSION="${BASE_BRANCH#release/v}"
+        case "$MINOR_VERSION" in
+            *[!0-9.]*|""|*.*.*) die "release branch '${BASE_BRANCH}' must be named release/vX.Y" ;;
+        esac
+        ;;
+    *)
+        die "ralph must be started from '${DEFAULT_BRANCH}' or a 'release/vX.Y' branch, not '${BASE_BRANCH}'.
+  From ${DEFAULT_BRANCH} (multi-line — recommended): git checkout ${DEFAULT_BRANCH} && ./scripts/ralph.sh
+  From one line:                                    git checkout release/v0.3 && ./scripts/ralph.sh"
+        ;;
+esac
 
-cd "$REPO_ROOT"
+# In single-task mode on a release branch, validate the task belongs here.
+if [ -n "$SINGLE_TASK" ] && [ -n "$MINOR_VERSION" ]; then
+    TASK_LINE="$(printf '%s' "$SINGLE_TASK" | sed 's/\.[0-9]*$//')"
+    [ "$TASK_LINE" = "$MINOR_VERSION" ] \
+        || die "Task ${SINGLE_TASK} belongs to line ${TASK_LINE}, not ${BASE_BRANCH}."
+fi
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
-    die "working tree is dirty — commit or stash changes before running ralph"
+    die "working tree is dirty — commit or stash before running ralph"
 fi
 
-# ── PID file + stop mechanism ─────────────────────────────────────────────────
+# ── PID file + stop mechanism ────────────────────────────────────────────────
 RALPH_PID_FILE="/tmp/ralph.pid"
 STOP_SENTINEL="$REPO_ROOT/scripts/STOP.md"
 STOP_REQUESTED=0
 
 printf '%d\n' $$ > "$RALPH_PID_FILE"
 trap 'rm -f "$RALPH_PID_FILE"' EXIT
-trap 'STOP_REQUESTED=1; warn "Stop signal received — finishing current task then exiting."' INT TERM
+trap 'STOP_REQUESTED=1; warn "Stop signal received — will exit cleanly after the current task."' INT TERM
 
-# ── announce ──────────────────────────────────────────────────────────────────
 log "PID $$ written to $RALPH_PID_FILE"
-log "To stop gracefully:  kill -TERM \$(cat $RALPH_PID_FILE)  or  touch $STOP_SENTINEL"
-
-if [ "$DURATION_SECS" -gt 0 ]; then
-    _human="$(( DURATION_SECS / 3600 ))h $(( (DURATION_SECS % 3600) / 60 ))m"
-    log "Time limit: ${_human}"
+if [ -n "$MINOR_VERSION" ]; then
+    log "Mode: single-line  branch: ${BASE_BRANCH}"
+else
+    log "Mode: multi-line  starting from ${DEFAULT_BRANCH}"
 fi
+log "To stop gracefully: kill -TERM \$(cat $RALPH_PID_FILE) or touch $STOP_SENTINEL"
 
-if [ "$LOOP_MODE" -eq 1 ]; then
-    warn "Loop mode enabled — ralph will continue after each PR. Use only for independent tasks."
-fi
+# ── agent helpers ────────────────────────────────────────────────────────────
+agent_provider() { printf '%s' "$1" | sed 's|/.*||'; }
+agent_model()    { printf '%s' "$1" | sed 's|^[^/]*/||'; }
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-# Escape dots in a string for use in sed/grep patterns.
-escape_dots() { printf '%s' "$1" | sed 's/\./\\./g'; }
-
-# Extract phase (X.Y) from a task id (X.Y-N).
-task_phase() { printf '%s' "$1" | sed 's/-[0-9][0-9]*$//'; }
-
-# Determine the current active phase: the phase of the first ⏳ pending task.
-# Returns empty string if no open tasks remain.
-current_phase() {
-    grep -m1 "^| *[0-9][0-9]*\.[0-9][0-9]*-[0-9][0-9]* *| *⏳" "$TODO" \
-        | sed 's/^| *\([0-9][0-9]*\.[0-9][0-9]*\)-[0-9][0-9]* *|.*/\1/' \
-        || true
+agent_cli() {
+    case "$(agent_provider "$1")" in
+        claude-code)    printf 'claude' ;;
+        github-copilot) printf 'copilot' ;;
+        opencode-go)    printf 'opencode' ;;
+        kilocode)       printf 'kilo' ;;
+        *)              printf 'copilot' ;;
+    esac
 }
 
-# Return the next open task id (⏳ pending) for a given phase, or empty string.
+invoke_agent() {
+    _agent="$1"; shift
+    _prompt="$1"; shift
+
+    if [ "$CAVEMAN" = "1" ]; then
+        _cave="SPEAK IN CAVEMAN MODE (${CAVEMAN_LEVEL}). Ultra-compressed output. No fluff. Full technical accuracy. Short sentences.
+"
+        _prompt="${_cave}${_prompt}"
+    fi
+
+    _pf="$(mktemp 2>/dev/null || printf '/tmp/ralph-prompt-%s' "$$")"
+    printf '%s' "$_prompt" > "$_pf"
+    _cli="$(agent_cli "$_agent")"
+
+    case "$(agent_provider "$_agent")" in
+        claude-code)
+            cat "$_pf" | "$_cli" -p --model "$(agent_model "$_agent")" \
+                --dangerously-skip-permissions 2>&1 ;;
+        github-copilot)
+            if [ "$QUIET" = "1" ]; then
+                cat "$_pf" | "$_cli" --model "$(agent_model "$_agent")" --allow-all --no-ask-user 2>/dev/null
+            else
+                cat "$_pf" | "$_cli" --model "$(agent_model "$_agent")" --allow-all --no-ask-user 2>&1
+            fi ;;
+        opencode-go)
+            cat "$_pf" | "$_cli" run --model "$_agent" --dangerously-skip-permissions 2>&1 ;;
+        *)
+            cat "$_pf" | "$_cli" --model "$(agent_model "$_agent")" 2>&1 ;;
+    esac
+    rm -f "$_pf"
+}
+
+resolve_dev_agent() {
+    _task_block="$1"
+    _agent=$(printf '%s' "$_task_block" | grep -im1 'Agent:' | sed 's/.*Agent:\s*//' | xargs)
+    case "$_agent" in
+        task_planning_agent|TASK_PLANNING_AGENT)   printf '%s' "$TASK_PLANNING_AGENT" ;;
+        basic_dev_agent|BASIC_DEV_AGENT)           printf '%s' "$BASIC_DEV_AGENT" ;;
+        mid_dev_agent|MID_DEV_AGENT)               printf '%s' "$MID_DEV_AGENT" ;;
+        pro_dev_agent|PRO_DEV_AGENT)               printf '%s' "$PRO_DEV_AGENT" ;;
+        task_review_agent|TASK_REVIEW_AGENT)       printf '%s' "$TASK_REVIEW_AGENT" ;;
+        release_review_agent|RELEASE_REVIEW_AGENT) printf '%s' "$RELEASE_REVIEW_AGENT" ;;
+        major_release_review_agent|MAJOR_RELEASE_REVIEW_AGENT) printf '%s' "$MAJOR_RELEASE_REVIEW_AGENT" ;;
+        architect_agent|ARCHITECT_AGENT)           printf '%s' "$ARCHITECT_AGENT" ;;
+        human|Human|HUMAN)
+            # Human-fenced tasks map to pro so they are visible; fence with --until.
+            printf '%s' "$PRO_DEV_AGENT" ;;
+        *)                                         printf '%s' "$MID_DEV_AGENT" ;;
+    esac
+}
+
+# ── todo helpers ─────────────────────────────────────────────────────────────
+all_todo_lines() {
+    for _f in "$REPO_ROOT/docs"/$TODO_GLOB; do
+        [ -f "$_f" ] && cat "$_f" || true
+    done
+}
+
+# Next open task id within line X.Y (e.g. 0.3.7), or empty.
 next_task() {
-    _ph="$1"
-    _esc="$(escape_dots "$_ph")"
-    grep -m1 "^| *${_esc}-[0-9][0-9]* *| *⏳" "$TODO" \
-        | sed 's/^| *\([0-9][0-9]*\.[0-9][0-9]*-[0-9][0-9]*\) *|.*/\1/' \
-        | sed 's/ *$//' \
-        || true
+    all_todo_lines | grep -m1 "^- \[ \] \`${MINOR_VERSION}\.[0-9]\+\`" \
+        | sed "s/^- \[ \] \`\([^\`]*\)\`.*/\1/" || true
 }
 
-# Extract the phase section from TODO.md (from ## Phase X.Y.* to the next ##).
-# Provides ralph's copilot prompt with full context for the active phase.
-phase_section() {
-    _ph="$1"
-    _esc="$(escape_dots "$_ph")"
-    awk -v ph="$_esc" '
-        /^## Phase / {
-            if (found) exit
-            if ($0 ~ ("Phase " ph "\\.")) found=1
-        }
-        found { print }
-    ' "$TODO"
+# Release line of the first unchecked task across all files (e.g. 0.3).
+next_minor() {
+    all_todo_lines | grep -m1 "^- \[ \] \`[0-9]\+\.[0-9]\+\.[0-9]\+\`" \
+        | sed "s/^- \[ \] \`\([^\`]*\)\`.*/\1/" \
+        | sed 's/\.[0-9]*$//' || true
+}
+next_minor_probe() { next_minor; }
+
+task_block() {
+    TASK_ID="$1"
+    all_todo_lines | awk -v tid="$TASK_ID" '
+        BEGIN { pat = "^- \\[.\\] `" tid "`" }
+        $0 ~ pat      { found=1; print; next }
+        found && /^- \[.\] `[0-9]/ { exit }
+        found         { print }
+    '
 }
 
-# Return the task definition row from the Tasks table (4-column row with
-# description, complexity, agent — not the status row which starts with ⏳/✅).
-task_definition_row() {
-    _id="$1"
-    _esc="$(escape_dots "$_id")"
-    # The task definition row has the description in the 2nd column (starts
-    # with a letter or backtick), unlike the status row (starts with emoji).
-    grep "^| *${_esc} *| *[A-Za-z\`]" "$TODO" | head -1 || true
-}
-
-# Append a timestamped entry to the ralph log.
 ralph_log() {
-    _entry="$1"
+    ENTRY="$1"
     mkdir -p "$(dirname "$LOG")"
-    printf '\n## %s\n\n%s\n' "$(date '+%Y-%m-%d %H:%M')" "$_entry" >> "$LOG"
+    printf '\n## %s\n\n%s\n' "$(date '+%Y-%m-%d %H:%M')" "$ENTRY" >> "$LOG"
 }
 
-# Update the status column for a task row in TODO.md (portable, no sed -i).
-# Usage: set_task_status <task-id> <new-status-text>
-set_task_status() {
-    _id="$1"
-    _status="$2"
-    _esc="$(escape_dots "$_id")"
-    _tmp="$(mktemp)"
-    # Replace the status column (between first and second | after the task id)
-    # Works for both ⏳ pending and 🟡 partial rows.
-    sed "s/^| *${_esc} *| *[^|]*/| ${_id} | ${_status} /" "$TODO" > "$_tmp"
-    mv "$_tmp" "$TODO"
+# Returns 0 (true) if semver A < B. Numeric per-component compare; missing
+# components count as 0 (e.g. 0.3 < 0.3.9).
+version_lt() {
+    _a="$1"; _b="$2"
+    printf '%s\n%s\n' "$_a" "$_b" | awk -F. '
+        { for (i = 1; i <= 3; i++) v[NR, i] = ($i == "" ? 0 : $i + 0) }
+        END {
+            for (i = 1; i <= 3; i++) {
+                if (v[1, i] < v[2, i]) { exit 0 }
+                if (v[1, i] > v[2, i]) { exit 1 }
+            }
+            exit 1
+        }'
 }
 
-# ── deadline / stop helpers ───────────────────────────────────────────────────
-deadline_reached() {
-    [ "$DEADLINE" -gt 0 ] && [ "$(date +%s)" -ge "$DEADLINE" ]
+auto_mark_task() {
+    for _tf in "$REPO_ROOT/docs"/$TODO_GLOB; do
+        [ -f "$_tf" ] || continue
+        if grep -q "^- \[ \] \`${TASK_ID}\`" "$_tf" 2>/dev/null; then
+            warn "Agent did not mark ${TASK_ID} as done — marking it now."
+            if sed --version >/dev/null 2>&1; then
+                sed -i "s|^- \[ \] \`${TASK_ID}\`|- [x] \`${TASK_ID}\`|" "$_tf"
+            else
+                sed -i '' "s|^- \[ \] \`${TASK_ID}\`|- [x] \`${TASK_ID}\`|" "$_tf"
+            fi
+            git add "$_tf"
+            GIT_EDITOR=true git commit -m "chore(todo): auto-mark ${TASK_ID} done" >/dev/null 2>&1 \
+                && git push origin "$BASE_BRANCH" 2>/dev/null || true
+        fi
+    done
 }
 
+# ── deadline / stop helpers ──────────────────────────────────────────────────
+time_remaining() {
+    _left=$((DEADLINE - $(date +%s)))
+    if [ "$_left" -le 0 ]; then printf '0s'
+    else printf '%dh %dm %ds' $(( _left / 3600 )) $(( (_left % 3600) / 60 )) $(( _left % 60 )); fi
+}
+deadline_reached() { [ "$DEADLINE" -gt 0 ] && [ "$(date +%s)" -ge "$DEADLINE" ]; }
 stop_requested() {
     [ "$STOP_REQUESTED" -eq 1 ] && return 0
     if [ -f "$STOP_SENTINEL" ]; then
         warn "Stop sentinel found: $STOP_SENTINEL — consuming it."
-        rm -f "$STOP_SENTINEL"
-        STOP_REQUESTED=1
-        return 0
+        rm -f "$STOP_SENTINEL"; STOP_REQUESTED=1; return 0
     fi
     return 1
 }
 
-# ── invoke copilot safely ─────────────────────────────────────────────────────
-# Writes prompt to a temp file and pipes it to avoid argument length limits.
-# Usage: invoke_copilot "$PROMPT" [extra copilot args...]
-invoke_copilot() {
-    _prompt="$1"; shift
-    _pf="$(mktemp)"
-    printf '%s' "$_prompt" > "$_pf"
-    cat "$_pf" | copilot "$@" 2>/dev/null
-    rm -f "$_pf"
+# ── branch helpers ───────────────────────────────────────────────────────────
+switch_to_line() {
+    _minor="$1"; _branch="release/v${_minor}"
+    if git show-ref --verify --quiet "refs/heads/${_branch}" 2>/dev/null \
+        || git ls-remote --exit-code --heads origin "${_branch}" >/dev/null 2>&1; then
+        log "Switching to existing ${_branch}"
+        git checkout "$_branch" >/dev/null 2>&1
+        git pull --ff-only origin "$_branch" >/dev/null 2>&1 \
+            || warn "could not fast-forward ${_branch} from origin — continuing local"
+    else
+        log "Creating ${_branch} from ${DEFAULT_BRANCH}"
+        git checkout "$DEFAULT_BRANCH" >/dev/null 2>&1
+        git pull --ff-only origin "$DEFAULT_BRANCH" >/dev/null 2>&1 \
+            || warn "could not fast-forward ${DEFAULT_BRANCH} from origin — continuing local"
+        git checkout -b "$_branch"
+        git push -u origin "$_branch"
+        good "${_branch} created and pushed."
+    fi
+    BASE_BRANCH="$_branch"; MINOR_VERSION="$_minor"
 }
 
-# ── check gate ────────────────────────────────────────────────────────────────
-# Run the three mandatory checks. Retries up to MAX_CHECK_ATTEMPTS times,
-# asking copilot to fix failures between attempts.
-MAX_CHECK_ATTEMPTS=3
-run_checks_with_retry() {
-    _attempt=0
-    while [ $_attempt -lt $MAX_CHECK_ATTEMPTS ]; do
-        _attempt=$((_attempt + 1))
-        log "Check attempt ${_attempt}/${MAX_CHECK_ATTEMPTS}"
+# ── semver gates ─────────────────────────────────────────────────────────────
+# Y = 0 lines (e.g. 1.0) are release-gated: RC + human sign-off required.
+is_major_release() {
+    case "$MINOR_VERSION" in
+        *.0) return 0 ;;
+        *)   return 1 ;;
+    esac
+}
 
-        _fmt_out="$(cargo fmt --check 2>&1)" && _fmt_ok=1 || _fmt_ok=0
-        _clip_out="$(cargo clippy --all-targets --all-features -- -D warnings 2>&1)" && _clip_ok=1 || _clip_ok=0
-        _test_out="$(cargo test 2>&1)" && _test_ok=1 || _test_ok=0
+prepare_major_rc() {
+    MAJOR="${MINOR_VERSION%.0}"
+    RC_VER="${MAJOR}.0.0"
+    RC_BRANCH="rc/v${RC_VER}-rc.1"
+    RC_TAG="v${RC_VER}-rc.1"
 
-        if [ "$_fmt_ok" -eq 1 ] && [ "$_clip_ok" -eq 1 ] && [ "$_test_ok" -eq 1 ]; then
-            good "All checks passed."
-            # Capture last 20 lines of test output for PR body
-            LAST_TEST_OUTPUT="$(printf '%s' "$_test_out" | tail -20)"
+    log "MAJOR RELEASE — line ${MINOR_VERSION} requires human sign-off."
+
+    if git show-ref --verify --quiet "refs/heads/${RC_BRANCH}" 2>/dev/null; then
+        git checkout "$RC_BRANCH" >/dev/null 2>&1
+    else
+        git checkout -b "$RC_BRANCH" >/dev/null 2>&1
+        git push -u origin "$RC_BRANCH"
+    fi
+    if git show-ref --verify --quiet "refs/tags/${RC_TAG}" 2>/dev/null; then
+        warn "Tag ${RC_TAG} already exists — skipping."
+    else
+        git tag -a "$RC_TAG" -m "Release candidate: ${RC_TAG}"
+        git push origin "$RC_TAG"
+    fi
+
+    ralph_log "MAJOR_RC_READY: ${RC_BRANCH} + tag ${RC_TAG} created. Awaiting human sign-off."
+    warn ""
+    warn "  RC ready: ${RC_TAG} (branch ${RC_BRANCH})"
+    warn "  Before merging to main:"
+    warn "    1. Round-table review (>= 2 models)"
+    warn "    2. Human sign-off"
+    warn "    3. Human runs: git checkout ${DEFAULT_BRANCH} && git merge --no-ff ${RC_BRANCH}"
+    warn ""
+    exit 0
+}
+
+# ── phase completion review + merge ──────────────────────────────────────────
+phase_review_and_merge() {
+    if is_major_release; then prepare_major_rc; fi
+
+    log "Line ${MINOR_VERSION} complete — running release review before merging."
+
+    MAX_ATTEMPTS=3; ATTEMPT=0
+    while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+        ATTEMPT=$((ATTEMPT + 1))
+        log "Review attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
+
+        LINE_STATUS="$(all_todo_lines | grep "\`${MINOR_VERSION}\." | head -30 || true)"
+        CHANGED="$(git diff --name-only "${DEFAULT_BRANCH}"..."${BASE_BRANCH}" 2>/dev/null | head -100 || true)"
+        COMMITS="$(git log --oneline "${DEFAULT_BRANCH}"..."${BASE_BRANCH}" 2>/dev/null | head -50 || true)"
+        REVIEW_LOG="/tmp/ralph-line-review-${MINOR_VERSION}-${ATTEMPT}.log"
+
+        invoke_agent "$RELEASE_REVIEW_AGENT" "You are performing a release-line completion review for the ${REPO_NAME} repository.
+All tasks in line ${MINOR_VERSION} are reported complete. Inspect the repo as needed.
+
+Branches: ${DEFAULT_BRANCH} vs ${BASE_BRANCH}
+
+Task status:
+${LINE_STATUS}
+
+Commits:
+${COMMITS}
+
+Files changed:
+${CHANGED}
+
+Checklist — write PASS or FAIL plus one line each:
+1. Every ${MINOR_VERSION}.* task is marked [x].
+2. No regressions: checks pass (${FMT_CMD}; ${LINT_CMD}; ${TEST_CMD}).
+3. docs/memory.md has entries covering this line where architectural choices were made.
+4. No unrelated scope creep.
+5. No security issues introduced.
+6. Code quality acceptable — no dead code, no unwraps/panics in production paths.
+
+If every item passes print exactly: PHASE_APPROVED
+Otherwise print exactly: PHASE_BLOCKED and list what must be fixed first." \
+            2>&1 | tee "$REVIEW_LOG" >/dev/null
+        [ "$QUIET" = "1" ] || cat "$REVIEW_LOG"
+
+        if grep -q "PHASE_APPROVED" "$REVIEW_LOG" 2>/dev/null; then
+            good "Review approved — merging ${BASE_BRANCH} → ${DEFAULT_BRANCH}, tagging v${MINOR_VERSION}.0"
+            git checkout "$DEFAULT_BRANCH"
+            git pull --ff-only origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
+            git merge --no-ff "$BASE_BRANCH" \
+                -m "release: merge ${BASE_BRANCH} into ${DEFAULT_BRANCH} — line ${MINOR_VERSION} complete"
+            NEW_VER="${MINOR_VERSION}.0"
+            if version_bump "$NEW_VER"; then
+                GIT_EDITOR=true git commit -m "chore: bump version to ${NEW_VER}" >/dev/null 2>&1 || true
+                log "Project version bumped to ${NEW_VER}"
+            fi
+            if ! git show-ref --verify --quiet "refs/tags/v${NEW_VER}" 2>/dev/null; then
+                git tag -a "v${NEW_VER}" -m "v${NEW_VER}: release line ${MINOR_VERSION} complete"
+                log "Tagged v${NEW_VER}"
+            fi
+            git push origin "$DEFAULT_BRANCH" --tags 2>/dev/null || git push origin "$DEFAULT_BRANCH"
+            ralph_log "PHASE_COMPLETE: ${MINOR_VERSION} merged to ${DEFAULT_BRANCH}; tagged v${NEW_VER}."
             return 0
         fi
 
-        warn "Check failures on attempt ${_attempt}:"
-        [ "$_fmt_ok"  -eq 0 ] && warn "  cargo fmt --check failed"
-        [ "$_clip_ok" -eq 0 ] && warn "  cargo clippy failed"
-        [ "$_test_ok" -eq 0 ] && warn "  cargo test failed"
-
-        if [ $_attempt -lt $MAX_CHECK_ATTEMPTS ]; then
-            log "Asking copilot to fix failures..."
-            _fix_prompt="$(cat "$SKILL")
-
----
-
-You are fixing check failures in the Playzoid-Server Rust codebase.
-Repository: $REPO_ROOT
-
-cargo fmt --check output:
-$_fmt_out
-
-cargo clippy output:
-$_clip_out
-
-cargo test output (last 60 lines):
-$(printf '%s' "$_test_out" | tail -60)
-
-Fix ONLY what is failing. Do not change unrelated code. Do not expand scope.
-Apply all fixes now using your file editing tools."
-
-            invoke_copilot "$_fix_prompt" \
-                --model "$CODE_MODEL" \
-                --add-dir "$REPO_ROOT/src" \
-                --add-dir "$REPO_ROOT/tests" \
-                >/dev/null
+        warn "Review blocked (attempt ${ATTEMPT}/${MAX_ATTEMPTS}) — see ${REVIEW_LOG}"
+        if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+            ralph_log "PHASE_BLOCKED: ${MINOR_VERSION} review failed after ${MAX_ATTEMPTS} attempts. See ${REVIEW_LOG}."
+            exit 1
         fi
-    done
 
-    warn "Checks still failing after ${MAX_CHECK_ATTEMPTS} attempts."
-    return 1
+        REVIEW_OUT="$(cat "$REVIEW_LOG")"
+        log "Asking architect agent to fix review blockers…"
+        invoke_agent "$ARCHITECT_AGENT" "The release review for line ${MINOR_VERSION} in ${REPO_NAME} returned PHASE_BLOCKED.
+Fix every issue listed. Minimum changes only. Do NOT commit.
+Print exactly: REVIEW_FIXES_DONE when finished.
+
+Review output:
+${REVIEW_OUT}" 2>&1 | tail -20
+
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            FIX_MSG="fix: address line ${MINOR_VERSION} review blockers (attempt ${ATTEMPT})"
+            FIX_TRY=0
+            while [ $FIX_TRY -lt 3 ]; do
+                FIX_TRY=$((FIX_TRY + 1))
+                git add -A
+                if git commit -m "$FIX_MSG" >/dev/null 2>&1; then
+                    good "Review fixes committed."
+                    break
+                fi
+                if [ $FIX_TRY -eq 3 ]; then
+                    warn "Fix commit failing after retries — continuing anyway."
+                    break
+                fi
+                HOOK_ERR="$(git commit -m "$FIX_MSG" 2>&1 || true)"
+                invoke_agent "$ARCHITECT_AGENT" "The commit for review fixes failed. Fix every failure below. Do NOT commit. Print exactly: FIXES_DONE when done.
+
+Error output:
+${HOOK_ERR}" 2>&1 | tail -10
+            done
+        fi
+        log "Re-running review after fixes…"
+    done
 }
 
-# ── single task execution ─────────────────────────────────────────────────────
+# ── per-task runner ──────────────────────────────────────────────────────────
 run_task() {
     TASK_ID="$1"
-    PHASE="$(task_phase "$TASK_ID")"
-    TASK_BRANCH="task/${TASK_ID}"
+    BRANCH="task/${TASK_ID}"
 
-    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log "Task: ${TASK_ID}  Phase: ${PHASE}  Branch: ${TASK_BRANCH}"
-    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log "Starting task ${BOLD}${TASK_ID}${RESET} on branch ${BRANCH}"
 
-    # Ensure we are on a clean main before branching.
-    git checkout main >/dev/null 2>&1
-    git pull --ff-only origin main >/dev/null 2>&1 \
-        || warn "Could not fast-forward main from origin — continuing on local."
-
-    # Create or reset the task branch.
-    if git show-ref --verify --quiet "refs/heads/${TASK_BRANCH}" 2>/dev/null; then
-        warn "Branch ${TASK_BRANCH} already exists — deleting and recreating."
-        git branch -D "$TASK_BRANCH" >/dev/null 2>&1
-    fi
-    git checkout -b "$TASK_BRANCH" >/dev/null 2>&1
-    good "Created branch ${TASK_BRANCH}"
-
-    # Mark the task in-progress.
-    set_task_status "$TASK_ID" "🔄 in-progress"
-    git add docs/TODO.md
-    git commit -m "chore(todo): mark task ${TASK_ID} in-progress" >/dev/null 2>&1 || true
-
-    # Build the copilot implementation prompt.
-    TASK_DEF="$(task_definition_row "$TASK_ID")"
-    PHASE_CTX="$(phase_section "$PHASE")"
-
-    IMPL_PROMPT="$(cat "$SKILL")
-
----
-
-## Current Task
-
-Task ID: ${TASK_ID}
-Task definition row from docs/TODO.md:
-${TASK_DEF}
-
-Full phase section for context:
-${PHASE_CTX}
-
----
-
-## Your Job
-
-Implement task ${TASK_ID} in full, following every rule in the skill above.
-Repository root: ${REPO_ROOT}
-
-Steps:
-1. Research: read all relevant existing files (src/, tests/, migrations/, docs/).
-2. Plan: outline what you will create/edit before writing any code.
-3. Implement: write production code, then tests, then the CHANGES.md entry.
-4. Update docs/TODO.md: the status row for ${TASK_ID} will be updated by the
-   script after your work; focus on the code and tests.
-5. DO NOT run cargo commands — the script will run checks after you finish.
-6. DO NOT commit or push — the script will handle that.
-
-Model policy: use ${CODE_MODEL} for all Rust/SQL/test code."
-
-    log "Invoking copilot for implementation..."
-    invoke_copilot "$IMPL_PROMPT" \
-        --model "$CODE_MODEL" \
-        --add-dir "$REPO_ROOT/src" \
-        --add-dir "$REPO_ROOT/tests" \
-        --add-dir "$REPO_ROOT/migrations" \
-        --add-dir "$REPO_ROOT/docs" \
-        --add-dir "$REPO_ROOT/memory" \
-        >/dev/null
-
-    log "Implementation complete. Running checks..."
-
-    # Run checks with retry.
-    if ! run_checks_with_retry; then
-        ralph_log "BLOCKED on task ${TASK_ID}: checks still failing after ${MAX_CHECK_ATTEMPTS} attempts. Fix manually then re-run ralph."
-        warn "Task ${TASK_ID} is blocked. See docs/ralph-log.md."
-        # Restore status to pending so the next ralph run retries.
-        set_task_status "$TASK_ID" "⏳ pending"
-        git add docs/TODO.md
-        git commit -m "chore(todo): unblock task ${TASK_ID} — checks failed" >/dev/null 2>&1 || true
-        git checkout main >/dev/null 2>&1
-        return 1
+    git checkout "$BASE_BRANCH" >/dev/null 2>&1
+    git pull --ff-only origin "$BASE_BRANCH" >/dev/null 2>&1 || true
+    if ! git checkout -b "$BRANCH" >/dev/null 2>&1; then
+        ralph_log "BLOCKED on ${TASK_ID}: branch ${BRANCH} already exists."
+        die "Branch '${BRANCH}' already exists — resolve it manually, then re-run."
     fi
 
-    # Stage everything and commit.
-    git add -A
+    TASK_BLOCK="$(task_block "$TASK_ID")"
+    SKILL_TEXT="$(cat "$SKILL")"
+    DEV_AGENT="$(resolve_dev_agent "$TASK_BLOCK")"
 
-    # Build commit message using cheap model.
-    COMMIT_MSG_PROMPT="Write a conventional-commits commit message for completing task ${TASK_ID} in the Playzoid-Server Rust project.
+    CHECKS_BLOCK="Run these checks and make them pass before finishing:"
+    [ -n "$FMT_CMD" ]  && CHECKS_BLOCK="${CHECKS_BLOCK}
+  ${FMT_CMD}"
+    [ -n "$LINT_CMD" ] && CHECKS_BLOCK="${CHECKS_BLOCK}
+  ${LINT_CMD}"
+    [ -n "$TEST_CMD" ] && CHECKS_BLOCK="${CHECKS_BLOCK}
+  ${TEST_CMD}"
 
-Task definition: ${TASK_DEF}
+    # Step 1 — plan (no code).
+    log "Step 1/3 — planning"
+    PLAN="$(invoke_agent "$TASK_PLANNING_AGENT" "You are an expert engineer planning a task for the ${REPO_NAME} repository (${LANG_NAME}).
+Read the skill file and task block, then write a numbered implementation plan. Do NOT write code.
 
-Rules:
-- First line: <type>(<scope>): <short description> (max 72 chars)
-- Blank line
-- One paragraph body describing what was done and why
-- Footer: Closes task ${TASK_ID}
+TASK ID: ${TASK_ID}
 
-Output ONLY the commit message text, nothing else."
+TASK BLOCK:
+${TASK_BLOCK}
 
-    COMMIT_MSG="$(invoke_copilot "$COMMIT_MSG_PROMPT" --model "$CHEAP_MODEL" 2>/dev/null)" \
-        || COMMIT_MSG="feat: implement task ${TASK_ID}
+SKILL FILE:
+${SKILL_TEXT}
 
-Closes task ${TASK_ID}"
+Produce:
+1. Numbered list of files to create/edit (path + one-sentence purpose).
+2. Numbered list of tests to write (name + what it proves).
+3. Blockers or security concerns, if any.")"
 
-    git commit -m "$COMMIT_MSG"
-    good "Committed task ${TASK_ID}"
+    # Step 2 — implement.
+    log "Step 2/3 — implementing with ${DEV_AGENT}"
+    IMPL_LOG="/tmp/ralph-impl-${TASK_ID}.log"
+    invoke_agent "$DEV_AGENT" "You are Ralph, the autonomous task agent for the ${REPO_NAME} repository.
+Implement task ${TASK_ID} in full, following every rule in the skill file below.
+Do not commit. Write all files, then verify your work.
 
-    # Push the branch.
-    git push origin HEAD
-    good "Pushed ${TASK_BRANCH} to origin"
+${CHECKS_BLOCK}
+Fix failures until clean. When finished print exactly: IMPLEMENTATION_DONE
 
-    # Build PR body using cheap model.
-    PR_BODY_PROMPT="Write a GitHub PR description for task ${TASK_ID} in the Playzoid-Server Rust project.
+TASK ID: ${TASK_ID}
 
-Task definition: ${TASK_DEF}
+TASK BLOCK:
+${TASK_BLOCK}
 
-cargo test output (last 20 lines):
-${LAST_TEST_OUTPUT}
+PLAN:
+${PLAN}
 
-The PR body must include:
-1. ## Summary — one paragraph
-2. ## Acceptance Criteria — checkboxes, each ticked [x]
-3. ## Test Output — the cargo test lines above in a code block
-4. Footer line: Closes task ${TASK_ID}
+SKILL FILE:
+${SKILL_TEXT}" 2>&1 | tee "$IMPL_LOG" | tail -15
 
-Output ONLY the PR body markdown, nothing else."
+    # Step 3 — self-review + fix.
+    log "Step 3/3 — self-review"
+    DIFF="$(git diff HEAD 2>/dev/null | head -600)"
+    invoke_agent "$TASK_REVIEW_AGENT" "You are reviewing an implementation for the ${REPO_NAME} repository.
+Work through the self-review checklist from the skill file. For each item write PASS
+or FAIL plus one line. For any FAIL item, fix it in the code now.
+Do not commit. After fixing everything print exactly: REVIEW_DONE
 
-    PR_BODY="$(invoke_copilot "$PR_BODY_PROMPT" --model "$CHEAP_MODEL" 2>/dev/null)" \
-        || PR_BODY="Implements task ${TASK_ID}.
+TASK ID: ${TASK_ID}
 
-$(printf '%s' "$LAST_TEST_OUTPUT" | awk 'BEGIN{print "```"}{print}END{print "```"}')
+GIT DIFF (up to 600 lines):
+${DIFF}
 
-Closes task ${TASK_ID}"
+SKILL FILE (contains the checklist):
+${SKILL_TEXT}" 2>&1 | tee "/tmp/ralph-review-${TASK_ID}.log" | tail -15
 
-    # Derive PR title from commit message first line.
-    PR_TITLE="$(printf '%s' "$COMMIT_MSG" | head -1)"
+    # Commit with retry.
+    log "Committing ${TASK_ID}"
+    COMMIT_MSG="$(invoke_agent "$TASK_PLANNING_AGENT" "Write a conventional-commits message for task ${TASK_ID} in ${REPO_NAME}.
+First line: '<type>(<scope>): <description, max 50 chars>'.
+Blank line, then one short body paragraph (what + why). End with a footer line: Closes task ${TASK_ID}
+Output only the message text, no fences.
 
-    # Open the PR.
-    log "Opening PR..."
-    PR_URL="$(gh pr create \
-        --base main \
-        --title "$PR_TITLE" \
-        --body "$PR_BODY" 2>&1)" || {
-        warn "gh pr create failed: $PR_URL"
-        ralph_log "BLOCKED on task ${TASK_ID}: gh pr create failed. Push succeeded; open PR manually."
-        set_task_status "$TASK_ID" "⏳ pending"
-        git push origin HEAD --force-with-lease >/dev/null 2>&1 || true
-        return 1
-    }
+Task:
+${TASK_BLOCK}")"
 
-    PR_NUM="$(printf '%s' "$PR_URL" | grep -o '[0-9][0-9]*$' || true)"
-    good "PR opened: $PR_URL"
+    ATTEMPTS=0; MAX_COMMIT_ATTEMPTS=3
+    COMMIT_LOG="/tmp/ralph-commit-${TASK_ID}.log"
+    while [ $ATTEMPTS -lt $MAX_COMMIT_ATTEMPTS ]; do
+        ATTEMPTS=$((ATTEMPTS + 1))
+        log "Commit attempt ${ATTEMPTS}/${MAX_COMMIT_ATTEMPTS}"
+        git add -A
+        if git commit -m "$COMMIT_MSG" >"$COMMIT_LOG" 2>&1; then
+            good "Commit succeeded."
+            break
+        fi
+        if grep -q "nothing to commit" "$COMMIT_LOG" 2>/dev/null; then
+            if git diff --quiet "${BASE_BRANCH}"...HEAD 2>/dev/null; then
+                warn "Agent produced no changes — failing task ${TASK_ID}."
+                ralph_log "FAILED: ${TASK_ID} — no changes produced."
+                git checkout "$BASE_BRANCH" >/dev/null 2>&1
+                git branch -D "$BRANCH" >/dev/null 2>&1 || true
+                return 1
+            fi
+            good "Working tree clean — commit already exists."
+            break
+        fi
+        cat "$COMMIT_LOG"
+        if [ $ATTEMPTS -eq $MAX_COMMIT_ATTEMPTS ]; then
+            ralph_log "BLOCKED on ${TASK_ID}: commit/checks still failing after ${MAX_COMMIT_ATTEMPTS} attempts."
+            git checkout "$BASE_BRANCH" >/dev/null 2>&1
+            git branch -D "$BRANCH" >/dev/null 2>&1 || true
+            die "Giving up on ${TASK_ID} after ${MAX_COMMIT_ATTEMPTS} attempts."
+        fi
+        HOOK_OUT="$(cat "$COMMIT_LOG")"
+        log "Asking architect agent to fix failures…"
+        invoke_agent "$ARCHITECT_AGENT" "The commit for task ${TASK_ID} in ${REPO_NAME} failed its checks.
+Fix every failure shown below. Change only what is required. Do NOT commit.
+Print exactly: FIXES_DONE when done.
 
-    # Update TODO.md status to 📬 PR #<n>.
-    git checkout main >/dev/null 2>&1
-    git pull --ff-only origin main >/dev/null 2>&1 || true
-    set_task_status "$TASK_ID" "📬 PR #${PR_NUM}"
-    git add docs/TODO.md
-    git commit -m "chore(todo): mark task ${TASK_ID} as 📬 PR #${PR_NUM}" >/dev/null 2>&1 || true
-    git push origin HEAD >/dev/null 2>&1 || true
+Failure output:
+${HOOK_OUT}" 2>&1 | tee "/tmp/ralph-fix-${TASK_ID}-${ATTEMPTS}.log" | tail -15
+    done
 
-    # Log the outcome.
-    ralph_log "DONE: ${TASK_ID} — PR #${PR_NUM} opened. Awaiting human review + merge.
-Branch: ${TASK_BRANCH}
-PR: ${PR_URL}"
+    # PR mode: push the task branch, open a PR, and stop — a human merges.
+    if [ "$MERGE_MODE" = "pr" ] && command -v gh >/dev/null 2>&1; then
+        git push -u origin "$BRANCH"
+        PR_URL="$(gh pr create --base "$BASE_BRANCH" \
+            --title "$(printf '%s' "$COMMIT_MSG" | head -1)" \
+            --body "Closes task ${TASK_ID}
 
-    good "Task ${TASK_ID} complete. PR #${PR_NUM} is open and awaiting review."
-    return 0
+${COMMIT_MSG}" 2>&1 || true)"
+        good "PR opened: ${PR_URL}"
+        ralph_log "PR_OPENED: ${TASK_ID} — ${PR_URL}. Awaiting human merge."
+        return 0
+    fi
+
+    # Merge back into the release line so todo state stays consistent.
+    log "Merging ${BRANCH} into ${BASE_BRANCH}"
+    git checkout "$BASE_BRANCH"
+    git pull --ff-only origin "$BASE_BRANCH" >/dev/null 2>&1 || true
+    git merge --no-ff "$BRANCH" -m "merge: ${BRANCH} into ${BASE_BRANCH}"
+
+    auto_mark_task
+    git push origin "$BASE_BRANCH"
+
+    git branch -d "$BRANCH" >/dev/null 2>&1 || true
+    git push origin --delete "$BRANCH" 2>/dev/null || true
+
+    good "Task ${TASK_ID} merged into ${BASE_BRANCH}."
+    ralph_log "DONE: ${TASK_ID} merged into ${BASE_BRANCH}."
 }
 
-# ── main loop ─────────────────────────────────────────────────────────────────
-TASKS_COMPLETED=0
-TASKS_ATTEMPTED=0
+# ── main ─────────────────────────────────────────────────────────────────────
 
-if [ -n "$SINGLE_TASK" ]; then
-    # Single-task mode.
-    TASKS_ATTEMPTED=$((TASKS_ATTEMPTED + 1))
-    run_task "$SINGLE_TASK" && TASKS_COMPLETED=$((TASKS_COMPLETED + 1))
-else
-    # Multi-task mode: iterate through open tasks.
-    while true; do
-        # Check stop conditions.
-        if stop_requested; then
-            warn "Stopping — stop requested after ${TASKS_COMPLETED} task(s) completed."
-            break
+# Dry-run: report the next action and exit (after helpers are defined).
+if [ "$DRY_RUN" -eq 1 ]; then
+    log "Dry run: no changes will be made."
+    log "Repo: ${REPO_NAME} (${LANG_NAME})"
+    log "Checks: fmt='${FMT_CMD}' lint='${LINT_CMD}' test='${TEST_CMD}'"
+    if [ -n "$SINGLE_TASK" ]; then
+        log "Would run task ${SINGLE_TASK} on $( [ -n "$MINOR_VERSION" ] && printf '%s' "$BASE_BRANCH" || printf 'release/v%s' "$(printf '%s' "$SINGLE_TASK" | sed 's/\.[0-9]*$//')" )."
+        exit 0
+    fi
+    if [ -z "$MINOR_VERSION" ]; then
+        _nm="$(next_minor)"
+        if [ -n "$_nm" ]; then
+            log "Would switch to release/v${_nm} and start its next open task."
+        else
+            log "No open tasks found."
         fi
-        if deadline_reached; then
-            warn "Stopping — time limit reached after ${TASKS_COMPLETED} task(s) completed."
-            break
-        fi
-
-        # Sync to latest main before finding next task.
-        git checkout main >/dev/null 2>&1
-        git pull --ff-only origin main >/dev/null 2>&1 || true
-
-        PHASE="$(current_phase)"
-        if [ -z "$PHASE" ]; then
-            good "No more open tasks found in docs/TODO.md. All done!"
-            break
-        fi
-
-        TASK_ID="$(next_task "$PHASE")"
-        if [ -z "$TASK_ID" ]; then
-            good "Phase ${PHASE} has no more ⏳ pending tasks."
-            break
-        fi
-
-        TASKS_ATTEMPTED=$((TASKS_ATTEMPTED + 1))
-        run_task "$TASK_ID" && TASKS_COMPLETED=$((TASKS_COMPLETED + 1))
-
-        if [ "$LOOP_MODE" -eq 0 ]; then
-            log "Stopping after one task (default). Use --loop to continue automatically."
-            log "Re-run ralph after the PR is reviewed and merged to pick up the next task."
-            break
-        fi
-    done
+    else
+        _nt="$(next_task)"
+        [ -n "$_nt" ] && log "Next task on ${BASE_BRANCH}: ${_nt}" \
+                   || log "Line ${MINOR_VERSION} would go to review/merge."
+    fi
+    exit 0
 fi
 
-ralph_log "Session complete. Tasks completed: ${TASKS_COMPLETED} of ${TASKS_ATTEMPTED} attempted."
-log "Done. Tasks completed: ${TASKS_COMPLETED}."
+# Single-task mode.
+if [ -n "$SINGLE_TASK" ]; then
+    if deadline_reached || stop_requested; then
+        warn "Stop/deadline condition met before task could start."
+        exit 0
+    fi
+    if [ -z "$MINOR_VERSION" ]; then
+        switch_to_line "$(printf '%s' "$SINGLE_TASK" | sed 's/\.[0-9]*$//')"
+    fi
+    run_task "$SINGLE_TASK"
+    exit 0
+fi
+
+# Loop mode — works through every open line in sequence.
+TASKS_DONE=0
+while :; do
+    if deadline_reached; then
+        good "Time limit reached. Tasks completed: ${TASKS_DONE}."
+        ralph_log "Time limit reached. Completed: ${TASKS_DONE}."
+        exit 0
+    fi
+    if stop_requested; then
+        good "Graceful stop. Tasks completed: ${TASKS_DONE}."
+        ralph_log "Graceful stop. Completed: ${TASKS_DONE}."
+        exit 0
+    fi
+
+    if [ "$BASE_BRANCH" = "$DEFAULT_BRANCH" ]; then
+        git pull --ff-only origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
+        _nm="$(next_minor)"
+        if [ -z "$_nm" ]; then
+            good "All lines complete. Tasks completed: ${TASKS_DONE}."
+            ralph_log "All lines complete. Completed: ${TASKS_DONE}."
+            exit 0
+        fi
+        switch_to_line "$_nm"
+    fi
+
+    TASK_ID="$(next_task)"
+
+    if [ -n "$UNTIL_TASK" ] && [ -n "$TASK_ID" ] && version_lt "$TASK_ID" "$UNTIL_TASK"; then
+        good "Reached --until boundary (${UNTIL_TASK}). Stopping."
+        ralph_log "--until boundary reached before ${TASK_ID}. Completed: ${TASKS_DONE}."
+        exit 0
+    fi
+
+    if [ -z "$TASK_ID" ]; then
+        good "Line ${MINOR_VERSION} complete (${TASKS_DONE} done this session)."
+        if [ "$MERGE_MODE" = "pr" ]; then
+            good "PR mode: open the line-completion PR yourself — ralph stops here."
+            ralph_log "LINE_COMPLETE: ${MINOR_VERSION}. Human review + merge required (MERGE_MODE=pr)."
+            exit 0
+        fi
+        phase_review_and_merge
+        BASE_BRANCH="$DEFAULT_BRANCH"; MINOR_VERSION=""
+        continue
+    fi
+
+    run_task "$TASK_ID" || {
+        warn "Task ${TASK_ID} failed — logging and moving on."
+        ralph_log "FAILED: ${TASK_ID} — see /tmp/ralph-*.log."
+        git checkout "$BASE_BRANCH" >/dev/null 2>&1 || true
+        git branch -D "task/${TASK_ID}" >/dev/null 2>&1 || true
+    }
+
+    if [ "$MERGE_MODE" = "pr" ]; then
+        # Tasks are usually dependent — stop after each PR.
+        good "PR mode: stopping after one task/PR. Re-run for the next task."
+        exit 0
+    fi
+
+    if [ "$TASK_ID" = "$UNTIL_TASK" ]; then
+        good "--until target ${UNTIL_TASK} completed. Stopping."
+        ralph_log "--until target ${UNTIL_TASK} completed. Completed: ${TASKS_DONE}."
+        exit 0
+    fi
+
+    TASKS_DONE=$((TASKS_DONE + 1))
+    if [ "$DEADLINE" -gt 0 ]; then log "Time remaining: $(time_remaining)"; fi
+    sleep 2
+done
