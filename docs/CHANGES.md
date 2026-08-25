@@ -2,6 +2,17 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — Submit leaderboard score (task 0.3-3)
+
+### Added
+- `POST /leaderboards/{game_id}/entries` — auth-gated score submission. Owning player taken from JWT; body `{ "score": i64, "props": [..]? }` (`deny_unknown_fields`, props must be a JSON array ≤ 4KB). Returns 201 with `{ playerId, score, rank, props? }`; rank = `1 + COUNT(higher scores OR equal scores submitted earlier)`.
+- Duplicate submission (unique `(leaderboard_id, player_id)`) → 409 directing clients to the PUT update endpoint (task 0.3-4). Unknown board → 404.
+- `src/services/leaderboards.rs` — added `submit_entry`, `Duplicate` / `PlayerNotFound` error variants, `MAX_PROPS_BYTES` cap.
+- `Cargo.toml` — enabled sqlx `json` feature for JSON column binding.
+- `tests/leaderboards_integration.rs` — 6 new integration tests (auth required, unknown board 404, 201 + rank + props echo, duplicate 409, submitted entries ranked in GET, invalid props 400).
+
+---
+
 ## [Unreleased] — 2026-08-25 — GET leaderboard endpoint (task 0.3-2)
 
 ### Added

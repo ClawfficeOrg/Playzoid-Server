@@ -20,7 +20,7 @@ url = "2.4.0"
 
 # Phase 0.2 prerequisites — wired in but not yet referenced in code.
 # Each subsequent recovery task (R-6..R-9 and Phase 0.2 tasks) consumes these.
-sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls", "macros", "chrono", "uuid", "migrate"] }
+sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls", "macros", "chrono", "uuid", "json", "migrate"] }
 jsonwebtoken = "9"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 dotenvy = "0.15"
