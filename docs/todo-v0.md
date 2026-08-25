@@ -85,9 +85,10 @@ connections.
 - [x] `0.3.4` Implement `PUT /leaderboards/{game_id}/entries/{player_id}` —
   update score. Complexity: Small. Owned paths: same as 0.3.2. ✅ Done
   (PR #18). Own-entry only (403 cross-player); omitted props preserved.
-- [ ] `0.3.5` DB migration: `game_saves` table.
+- [x] `0.3.5` DB migration: `game_saves` table.
   Complexity: Small. Owned paths: `migrations/`.
   Agent: basic_dev_agent
+  <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
 - [ ] `0.3.6` Implement `GET /saves/{player_id}` — list saves.
   Complexity: Small. Owned paths: `src/api/saves.rs` (new),
   `src/services/saves.rs` (new), `src/entities/save.rs` (new).
@@ -98,9 +99,11 @@ connections.
 - [ ] `0.3.8` Implement `GET /saves/{player_id}/{save_id}` — retrieve save.
   Complexity: Small. Owned paths: same as 0.3.6.
   Agent: basic_dev_agent
+  <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
 - [ ] `0.3.9` Implement `DELETE /saves/{player_id}/{save_id}`.
   Complexity: Small. Owned paths: same as 0.3.6.
   Agent: basic_dev_agent
+  <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
 - [ ] `0.3.10` Implement WebSocket `/ws` handler with actix-web WS upgrade.
   Complexity: High. Owned paths: `src/sockets/ws.rs`.
   Agent: pro_dev_agent
@@ -125,6 +128,7 @@ connections.
 - [ ] `0.3.17` Update `docs/TALO_API.md` with leaderboard, save, WS shapes.
   Complexity: Small. Owned paths: `docs/TALO_API.md`.
   Agent: basic_dev_agent
+  <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
 
 ### Milestone review steps (Phase 0.3)
 
