@@ -144,7 +144,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 
 | # | Task | Complexity | Agent |
 |---|------|------------|-------|
-| 0.3-1 | DB migration: `leaderboards` and `leaderboard_entries` tables | small | nemotron |
+| 0.3-1 | ⏳ pending | small | nemotron |
 | 0.3-2 | Implement `GET /leaderboards/{game_id}` — paginated top scores | medium | nemotron |
 | 0.3-3 | Implement `POST /leaderboards/{game_id}/entries` — submit score | small | nemotron |
 | 0.3-4 | Implement `PUT /leaderboards/{game_id}/entries/{player_id}` — update score | small | nemotron |
@@ -166,7 +166,7 @@ Phase 0.1 was prematurely marked complete before R-3..R-10. All gaps now closed.
 
 | #     | Status        | Evidence |
 |-------|---------------|----------|
-| 0.3-1 | ⏳ pending    | |
+| 0.3-1 | 📬 PR #15     | `migrations/20260825000001_create_leaderboards.{up,down}.sql` — leaderboards + leaderboard_entries tables; verified up/down against Docker dev stack |
 | 0.3-2 | ⏳ pending    | |
 | 0.3-3 | ⏳ pending    | |
 | 0.3-4 | ⏳ pending    | |
