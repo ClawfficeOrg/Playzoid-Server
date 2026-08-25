@@ -6,10 +6,10 @@ This docs/ directory contains design and implementation plans for the Playzoid-S
 
 - PLAN.md — high-level plan and architecture notes
 - TaloRustServerPlan.md — detailed plan for the Rust replacement server
-- TODO.md — phased TODO roadmap (semver-mapped)
+- todo.md — master todo index; versioned plans in todo-v0.md
 - GUIDELINES.md — contribution and engineering guidelines
 - TALO_API.md — API reference and serde examples
 - CHANGES.md — changelog (append-only)
 
 
-Benchmarking: add a follow-up task for gpt-5-mini to research a benchmarking harness to compare similar backend implementations and publish results in README. See TODO.md #benchmark for details.
+Benchmarking: add a follow-up task for gpt-5-mini to research a benchmarking harness to compare similar backend implementations and publish results in README. See todo.md #benchmark for details.

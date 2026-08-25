@@ -1,12 +1,48 @@
-# Playzoid-Server — Project Decision Log
+# Playzoid-Server — Memory Index
+
+Master memory file. High-level architectural decisions that apply across
+milestones live here; per-milestone detail lives in the versioned files below.
+Do not rewrite history — supersede entries with new dated ones.
+
+## Versioned Memory Files
+
+| Milestone | File | Status |
+|-----------|------|--------|
+| v0 — Foundation, Auth, Leaderboards | (this file) | 🔄 Active |
+
+## Hard Rules
+
+1. **Never delete files** without explicit instruction. `mv` to `/tmp/`
+   (recycle) instead of `rm`.
+2. **Never push directly to `main`** — all work goes through PRs
+   (see `AGENTS.md`).
+3. **No secrets in code or docs** — credentials live in `.env` / env vars.
+
+## Architectural Decisions (Cross-Cutting)
+
+### Argon2id for password hashing
+Established 2026-04-30. All `password_hash` columns store PHC-format
+Argon2id strings; bcrypt is not a dependency. Tuning parameters live in
+`Config`. Full rationale: dated entry below.
+
+### Docker dev stack is the live integration test target
+Established 2026-05-27. Integration tests are `#[ignore]`d by default and run
+against `docker compose -f config/docker-compose.dev.yml` (MySQL + Redis).
+Override with `DATABASE_URL` / `REDIS_URL`.
+
+### MySQL is canonical; PostgreSQL out of scope until 1.0.0
+sqlx uses the `mysql` feature only. Migrations are MySQL-flavoured SQL.
+
+---
+
+# Decision Log
 
 > Long-term decision record for the Playzoid-Server crate. New decisions are
 > appended at the bottom with a date stamp, the alternatives considered, and
-> the reasoning that won. Do not rewrite history — supersede entries with new
-> ones if the decision changes.
+> the reasoning that won.
 
-This file is referenced by [`docs/GUIDELINES.md`](../../../docs/GUIDELINES.md)
-and [`docs/TODO.md`](../../../docs/TODO.md).
+This file was previously `memory/projects/playzoid-server/project.md`; it moved
+to `docs/memory.md` as part of the standard repo layout.
 
 ---
 
@@ -58,7 +94,7 @@ and [`docs/TODO.md`](../../../docs/TODO.md).
 
 ## Open Questions / Assumptions
 
-These mirror the open questions in [`docs/TODO.md`](../../../docs/TODO.md). Resolve
+These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
 them here when answered.
 
 1. **Database engine** — MySQL is canonical (see `migrations/` and the sqlx
