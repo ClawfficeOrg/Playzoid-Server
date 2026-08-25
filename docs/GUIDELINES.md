@@ -131,14 +131,14 @@ docs(api): add TALO_API.md with serde struct examples
 
 ### PR Rules
 - **All work must go through PRs** — no direct pushes to `main`.
-- PRs must reference the task number from `TODO.md` (e.g., `Closes task 0.2-1`).
+- PRs must reference the task number from `docs/todo-v0.md` (e.g., `Closes task 0.3.5`).
 - PRs must pass CI before review is requested.
 - PRs require **at least one human reviewer** approval before merge.
 - Never self-approve or auto-merge PRs you authored.
 - PR descriptions must include:
   - Summary of changes
   - Test evidence (test output or load test results for WS changes)
-  - Reviewer checklist from `TODO.md` for the relevant phase
+  - Reviewer checklist from `docs/todo-v0.md` for the relevant phase
 
 ### Review Assignment
 - **Mission-critical PRs** (auth, WS, security): assign `@CompewterTutor` (Michael)
@@ -156,7 +156,7 @@ We follow [Semantic Versioning 2.0.0](https://semver.org/):
 - `PATCH` — bug fixes, backward-compatible
 
 ### Release Steps
-1. Ensure all phase tasks in `TODO.md` for the target version are complete.
+1. Ensure all phase tasks in `docs/todo-v0.md` for the target version are complete.
 2. Update `CHANGES.md` with release notes.
 3. Bump version in `Cargo.toml`.
 4. Create a PR: `chore: release vX.Y.Z`
@@ -246,7 +246,7 @@ docker compose -f config/docker-compose.dev.yml up
 
 All significant architectural decisions must be documented in:
 ```
-memory/projects/playzoid-server/project.md
+docs/memory.md
 ```
 
 Format for decision entries:
