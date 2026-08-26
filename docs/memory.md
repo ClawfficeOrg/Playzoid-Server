@@ -620,6 +620,60 @@ generic (`name` + JSON `props`).
 
 ---
 
+## 2026-08-26 — Redis fixed-window rate limiting: fail-open, Arc<S> middleware, monomorphic limiter (task 0.4.8)
+
+**Context:** task 0.4.8 adds rate limiting on public routes. Redis is already a
+dependency (WebSocket hub pre-0.4); the 0.3.x degraded-mode pattern (service
+unavailable → pass-through, warn-logged) is the repo-wide precedent. The task
+marks task 0.4.8 owned paths `src/middleware/` + `src/config.rs`.
+
+**Decisions:**
+- **Fixed windows in Redis, not an in-process token bucket:** one key per
+  `(class, client ip, window_start)` (`rl:{class}:{ip}:{window_start}`),
+  incremented by an atomic `EVAL` (`INCR` → first-hit `EXPIRE` → `TTL`). Crosses
+  worker threads today and server instances when multi-node lands; token-bucket
+  state would need the same shared store anyway. Two classes: `auth`
+  (credential prefixes, tight budget — brute-force backstop) and `default`
+  (other public prefixes). Rejected: in-memory counters (per-worker skew) and a
+  simpler global bucket (one client starves everyone).
+- **Fail-open degraded mode** matches the 0.3.x precedent: Redis down at boot →
+  no `RateLimiter` app data → pass-through; mid-flight backend error → allow +
+  warn-log. Availability over strictness for v0.
+- **`X-Forwarded-For` trust is opt-in** (`RATE_LIMIT_TRUST_XFF=true`): the
+  header is trivially spoofable without an overwriting proxy, so the default
+  buckets by socket peer IP. Requests with no peer address pass through rather
+  than sharing one unkeyed bucket.
+- **Never clone the inner `HttpRequest` for the 429 path:** cloning a
+  `ServiceRequest` bumps the `Rc` refcount; when the response is built from the
+  clone, actix calls `match_info_mut()` on the shared `Rc` and panics. The 429
+  is built by consuming the request directly — `req.into_response(...)` — in
+  the same branch that would otherwise feed it to the downstream service.
+- **Middleware future is `'static`, so the inner service is stored as `Arc<S>`:**
+  `Box::pin(async move {...})` cannot capture `&self` (it dies with `call`).
+  Cloning the service into the future needs `S: Clone`; wrapping the field in
+  `Arc` needs only `S: 'static`, which actix services satisfy. Also requires
+  `S::Future: 'static`.
+- **`RateLimiter` is a single concrete type** (`Arc<dyn WindowCounter>`, not
+  `RateLimiter<C>`): `app_data` downcasts on the *concrete* type, so a generic
+  limiter silently defeats the middleware (tests registered
+  `RateLimiter<MockCounter>` while the middleware looked up
+  `RateLimiter<RedisWindowCounter>` and found nothing → everything passed
+  through). The trait is object-safe with a `'static` boxed `CounterFuture`;
+  implementations copy owned captures (connection clone, key `String`) up front.
+- **Injectable clock** (`NowFn` on `RateLimiter`, test-only constructor):
+  fixed-window rollover is deterministic in tests (429 holds at
+  `Retry-After − 1`, passes after the window elapses).
+
+**Consequences:**
+- Rate limiting is scoped by path prefix, so future public routes just add a
+  prefix to `RATE_LIMIT_PUBLIC_PREFIXES`.
+- `Retry-After`/`X-RateLimit-*` headers give clients and proxies a standard
+  backoff signal; 0.4.9 Prometheus metrics can report 429 counts per class.
+- Fail-open means a total Redis outage costs request-frequency protection but
+  never availability — consistent with `/healthz` never being limited.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

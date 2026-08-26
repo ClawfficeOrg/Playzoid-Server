@@ -2,6 +2,19 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — Redis-backed rate limiting (task 0.4.8)
+
+### Added
+- Fixed-window rate limiting on public routes (`src/middleware/rate_limit.rs`): one Redis bucket per `(class, client ip, window_start)` key, incremented by an atomic `EVAL` `INCR`+`EXPIRE`+`TTL` script so limits hold across workers/instances. Registered globally; enforcement scoped internally to configured public prefixes (`/v1/auth`, `/auth`, `/ws` by default; `/healthz` never limited).
+- Two budgets: `auth` (credential endpoints, tight — brute-force backstop) and `default` (other public routes). Config via `RATE_LIMIT_*` env (see `src/config.rs`), validated at startup; `RATE_LIMIT_TRUST_XFF` opts into `X-Forwarded-For` client identification (opt-in only — header is spoofable without an overwriting proxy).
+- Blocked requests answer `429 Too Many Requests` with `Retry-After` + `X-RateLimit-Limit/Remaining/Reset` headers and the standard `{"error": ...}` JSON body. Response is built from the consumed `ServiceRequest` — the inner `HttpRequest` is never cloned, because actix panics when downstream calls `match_info_mut()` on an `Rc` whose refcount is > 1.
+- Degraded mode is fail-open by design (availability over strictness, `docs/memory.md`): Redis down at boot → no limiter app data → pass-through; mid-flight backend error → allow + warn-log.
+- Architecture: middleware future is `'static`, so the inner service is stored as `Arc<S>` (needs `S: 'static`, not `S: Clone`); `RateLimiter` is a single concrete type over `Arc<dyn WindowCounter>` (object-safe `CounterFuture`) so `app_data` lookups always match; an injectable `NowFn` clock makes fixed-window rollover deterministic in tests.
+- Unit tests same-file (24): key/classification/decision math, deplete-then-429, budget holds until `Retry-After - 1`, window resets after elapse, fail-open paths, degraded pass-through, excluded paths never hit the backend.
+
+### Security note
+- Auth-class budgets slow credential brute-force; per-IP buckets keyed on socket peer by default.
+
 ## [Unreleased] — 2026-08-26 — player feedback endpoint (task 0.4.7)
 
 ### Added
