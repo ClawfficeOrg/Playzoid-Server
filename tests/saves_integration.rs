@@ -60,7 +60,7 @@ async fn register_and_login(
     .await;
 
     let reg = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(serde_json::json!({ "username": username, "password": "pass12345" }))
         .to_request();
     let reg_resp = test::call_service(&app, reg).await;
@@ -69,7 +69,7 @@ async fn register_and_login(
     let player_id = body["id"].as_str().unwrap().to_owned();
 
     let login = test::TestRequest::post()
-        .uri("/auth/login")
+        .uri("/v1/auth/login")
         .set_json(serde_json::json!({ "username": username, "password": "pass12345" }))
         .to_request();
     let login_resp = test::call_service(&app, login).await;
@@ -124,7 +124,7 @@ async fn list_saves_requires_auth() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri("/saves/some-player")
+        .uri("/v1/saves/some-player")
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -148,7 +148,7 @@ async fn list_saves_cross_player_returns_403() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid_a}"))
+        .uri(&format!("/v1/saves/{pid_a}"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -173,7 +173,7 @@ async fn list_saves_unknown_or_deleted_player_returns_404() {
     )
     .await;
     let del = test::TestRequest::delete()
-        .uri(&format!("/players/{pid}"))
+        .uri(&format!("/v1/players/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -183,7 +183,7 @@ async fn list_saves_unknown_or_deleted_player_returns_404() {
 
     // The still-valid JWT maps to a soft-deleted player → service 404.
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}"))
+        .uri(&format!("/v1/saves/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -206,7 +206,7 @@ async fn list_saves_empty_array_when_no_saves() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}"))
+        .uri(&format!("/v1/saves/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -265,7 +265,7 @@ async fn list_saves_returns_blobs_newest_first() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}"))
+        .uri(&format!("/v1/saves/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -350,7 +350,7 @@ async fn create_save_requires_auth() {
     )
     .await;
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .set_json(valid_body())
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -366,7 +366,7 @@ async fn create_save_creates_and_round_trips() {
     let app = saves_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "name": "slot-1",
@@ -389,7 +389,7 @@ async fn create_save_creates_and_round_trips() {
 
     // Round-trip: the created save must appear in GET /saves/{pid}.
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}"))
+        .uri(&format!("/v1/saves/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -411,7 +411,7 @@ async fn create_save_omits_optional_fields() {
 
     // No playerId → defaults to JWT; no metadata → null.
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(valid_body())
         .to_request();
@@ -434,7 +434,7 @@ async fn create_save_cross_player_returns_403() {
     let app = saves_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token_a}")))
         .set_json(serde_json::json!({
             "name": "slot-1",
@@ -455,7 +455,7 @@ async fn create_save_rejects_unknown_fields() {
     let app = saves_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "name": "slot-1",
@@ -478,7 +478,7 @@ async fn create_save_rejects_oversized_save() {
     let big =
         serde_json::json!({ "data": "x".repeat(playzoid_server::services::saves::MAX_SAVE_BYTES) });
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "name": "slot-1",
@@ -507,7 +507,7 @@ async fn create_save_soft_deleted_player_returns_404() {
     )
     .await;
     let del = test::TestRequest::delete()
-        .uri(&format!("/players/{pid}"))
+        .uri(&format!("/v1/players/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -517,7 +517,7 @@ async fn create_save_soft_deleted_player_returns_404() {
 
     // The still-valid JWT maps to a soft-deleted player → service 404.
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(valid_body())
         .to_request();
@@ -539,7 +539,7 @@ async fn get_save_requires_auth() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri("/saves/player-uuid-1/save-uuid-1")
+        .uri("/v1/saves/player-uuid-1/save-uuid-1")
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -564,7 +564,7 @@ async fn get_save_returns_full_blob() {
 
     let app = saves_app!(pool, mgr, cfg);
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -591,7 +591,7 @@ async fn get_save_cross_player_returns_403() {
 
     let app = saves_app!(pool, mgr, cfg);
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid_a}/some-save-id"))
+        .uri(&format!("/v1/saves/{pid_a}/some-save-id"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -607,7 +607,7 @@ async fn get_save_unknown_save_returns_404() {
 
     let app = saves_app!(pool, mgr, cfg);
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}/{}", Uuid::new_v4()))
+        .uri(&format!("/v1/saves/{pid}/{}", Uuid::new_v4()))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -636,7 +636,7 @@ async fn get_save_other_players_save_returns_404() {
 
     let app = saves_app!(pool, mgr, cfg);
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid_a}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid_a}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token_a}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -671,7 +671,7 @@ async fn get_save_soft_deleted_player_returns_404() {
     )
     .await;
     let del = test::TestRequest::delete()
-        .uri(&format!("/players/{pid}"))
+        .uri(&format!("/v1/players/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -681,7 +681,7 @@ async fn get_save_soft_deleted_player_returns_404() {
 
     // The still-valid JWT maps to a soft-deleted player → service 404.
     let req = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -702,7 +702,7 @@ async fn delete_save_requires_auth() {
     )
     .await;
     let req = test::TestRequest::delete()
-        .uri("/saves/player-uuid-1/save-uuid-1")
+        .uri("/v1/saves/player-uuid-1/save-uuid-1")
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -737,7 +737,7 @@ async fn delete_save_removes_and_verifies_via_get() {
     let app = saves_app!(pool, mgr, cfg);
 
     let del = test::TestRequest::delete()
-        .uri(&format!("/saves/{pid}/{target_id}"))
+        .uri(&format!("/v1/saves/{pid}/{target_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, del).await;
@@ -747,7 +747,7 @@ async fn delete_save_removes_and_verifies_via_get() {
 
     // The deleted save is gone: GET on it → 404.
     let get = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}/{target_id}"))
+        .uri(&format!("/v1/saves/{pid}/{target_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, get).await;
@@ -755,7 +755,7 @@ async fn delete_save_removes_and_verifies_via_get() {
 
     // Sibling saves are unaffected.
     let list = test::TestRequest::get()
-        .uri(&format!("/saves/{pid}"))
+        .uri(&format!("/v1/saves/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, list).await;
@@ -777,7 +777,7 @@ async fn delete_save_cross_player_returns_403() {
 
     let app = saves_app!(pool, mgr, cfg);
     let req = test::TestRequest::delete()
-        .uri(&format!("/saves/{pid_a}/some-save-id"))
+        .uri(&format!("/v1/saves/{pid_a}/some-save-id"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -793,7 +793,7 @@ async fn delete_save_unknown_save_returns_404() {
 
     let app = saves_app!(pool, mgr, cfg);
     let req = test::TestRequest::delete()
-        .uri(&format!("/saves/{pid}/{}", Uuid::new_v4()))
+        .uri(&format!("/v1/saves/{pid}/{}", Uuid::new_v4()))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -822,7 +822,7 @@ async fn delete_save_other_players_save_returns_404() {
 
     let app = saves_app!(pool, mgr, cfg);
     let req = test::TestRequest::delete()
-        .uri(&format!("/saves/{pid_a}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid_a}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token_a}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -830,7 +830,7 @@ async fn delete_save_other_players_save_returns_404() {
 
     // The other player's save is still intact.
     let get = test::TestRequest::get()
-        .uri(&format!("/saves/{pid_b}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid_b}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token_a}")))
         .to_request();
     let resp = test::call_service(&app, get).await;
@@ -865,7 +865,7 @@ async fn delete_save_soft_deleted_player_returns_404() {
     )
     .await;
     let del = test::TestRequest::delete()
-        .uri(&format!("/players/{pid}"))
+        .uri(&format!("/v1/players/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -875,7 +875,7 @@ async fn delete_save_soft_deleted_player_returns_404() {
 
     // The still-valid JWT maps to a soft-deleted player → service 404.
     let req = test::TestRequest::delete()
-        .uri(&format!("/saves/{pid}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -893,7 +893,7 @@ async fn create_save_rejects_null_save_returns_400() {
     let app = saves_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "name": "slot-1", "save": null }))
         .to_request();
@@ -910,7 +910,7 @@ async fn create_save_rejects_oversized_name_returns_400() {
     let app = saves_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "name": "x".repeat(256),
@@ -930,7 +930,7 @@ async fn create_save_accepts_max_length_name_returns_201() {
     let app = saves_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "name": "x".repeat(255),
@@ -956,7 +956,7 @@ async fn create_save_rejects_oversized_metadata_returns_400() {
     let big_metadata =
         serde_json::json!({ "zone": "x".repeat(playzoid_server::services::saves::MAX_SAVE_BYTES) });
     let req = test::TestRequest::post()
-        .uri("/saves")
+        .uri("/v1/saves")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "name": "slot-1",
@@ -987,7 +987,7 @@ async fn delete_save_twice_second_delete_returns_404() {
 
     let app = saves_app!(pool, mgr, cfg);
     let del = test::TestRequest::delete()
-        .uri(&format!("/saves/{pid}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -997,9 +997,51 @@ async fn delete_save_twice_second_delete_returns_404() {
 
     // Second delete of the same save → 404 (idempotency boundary).
     let del = test::TestRequest::delete()
-        .uri(&format!("/saves/{pid}/{save_id}"))
+        .uri(&format!("/v1/saves/{pid}/{save_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, del).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// ── Legacy `/saves` alias paths (0.4.1 transition) ────────────────────────────
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn save_roundtrip_via_legacy_paths_still_works() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = saves_app!(pool, mgr, cfg);
+
+    // Create through the legacy unprefixed mount…
+    let req = test::TestRequest::post()
+        .uri("/saves")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "name": "legacy-slot", "save": { "hp": 7 } }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body: Value = test::read_body_json(resp).await;
+    let save_id = body["id"].as_str().expect("save id").to_owned();
+
+    // …list through the canonical `/v1` mount: both mounts share state.
+    let req = test::TestRequest::get()
+        .uri(&format!("/v1/saves/{pid}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list: Value = test::read_body_json(resp).await;
+    let entries = list.as_array().expect("saves array");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["id"], save_id);
+
+    // Delete through the legacy mount.
+    let req = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 }

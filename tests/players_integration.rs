@@ -63,7 +63,7 @@ async fn register_and_login(
     .await;
 
     let reg = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(serde_json::json!({ "username": username, "password": password }))
         .to_request();
     let reg_resp = test::call_service(&app, reg).await;
@@ -76,7 +76,7 @@ async fn register_and_login(
     let player_id = reg_body["id"].as_str().unwrap().to_owned();
 
     let login = test::TestRequest::post()
-        .uri("/auth/login")
+        .uri("/v1/auth/login")
         .set_json(serde_json::json!({ "username": username, "password": password }))
         .to_request();
     let login_resp = test::call_service(&app, login).await;
@@ -114,7 +114,7 @@ async fn get_player_own_profile_returns_200() {
     .await;
 
     let req = test::TestRequest::get()
-        .uri(&format!("/players/{player_id}"))
+        .uri(&format!("/v1/players/{player_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -150,7 +150,7 @@ async fn get_player_nonexistent_returns_404() {
     .await;
 
     let req = test::TestRequest::get()
-        .uri("/players/00000000-0000-0000-0000-000000000000")
+        .uri("/v1/players/00000000-0000-0000-0000-000000000000")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -174,7 +174,7 @@ async fn get_player_no_auth_returns_401() {
     .await;
 
     let req = test::TestRequest::get()
-        .uri("/players/some-id")
+        .uri("/v1/players/some-id")
         .to_request();
     assert_eq!(
         test::call_service(&app, req).await.status(),
@@ -210,7 +210,7 @@ async fn update_own_profile_returns_200() {
     .await;
 
     let req = test::TestRequest::put()
-        .uri(&format!("/players/{player_id}"))
+        .uri(&format!("/v1/players/{player_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "username": &new_username }))
         .to_request();
@@ -254,7 +254,7 @@ async fn update_other_players_profile_returns_403() {
     .await;
 
     let req = test::TestRequest::put()
-        .uri(&format!("/players/{player_a_id}"))
+        .uri(&format!("/v1/players/{player_a_id}"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .set_json(serde_json::json!({ "username": unique_username() }))
         .to_request();
@@ -291,7 +291,7 @@ async fn delete_own_account_returns_204_and_subsequent_get_returns_404() {
     .await;
 
     let del = test::TestRequest::delete()
-        .uri(&format!("/players/{player_id}"))
+        .uri(&format!("/v1/players/{player_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -300,7 +300,7 @@ async fn delete_own_account_returns_204_and_subsequent_get_returns_404() {
     );
 
     let get = test::TestRequest::get()
-        .uri(&format!("/players/{player_id}"))
+        .uri(&format!("/v1/players/{player_id}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     assert_eq!(
@@ -342,7 +342,7 @@ async fn delete_other_account_returns_403() {
     .await;
 
     let req = test::TestRequest::delete()
-        .uri(&format!("/players/{player_a_id}"))
+        .uri(&format!("/v1/players/{player_a_id}"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .to_request();
     assert_eq!(
@@ -379,7 +379,7 @@ async fn create_subaccount_returns_201_with_parent_id() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri("/players/subaccount")
+        .uri("/v1/players/subaccount")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "username": &child_username, "password": "childpass123" }))
         .to_request();
@@ -419,14 +419,14 @@ async fn list_subaccounts_returns_created_children() {
     .await;
 
     let sub = test::TestRequest::post()
-        .uri("/players/subaccount")
+        .uri("/v1/players/subaccount")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "username": &child_username, "password": "childpass123" }))
         .to_request();
     test::call_service(&app, sub).await;
 
     let list = test::TestRequest::get()
-        .uri(&format!("/players/{parent_id}/subaccounts"))
+        .uri(&format!("/v1/players/{parent_id}/subaccounts"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let list_resp = test::call_service(&app, list).await;
@@ -472,11 +472,50 @@ async fn list_subaccounts_cross_account_returns_403() {
     .await;
 
     let req = test::TestRequest::get()
-        .uri(&format!("/players/{player_a_id}/subaccounts"))
+        .uri(&format!("/v1/players/{player_a_id}/subaccounts"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .to_request();
     assert_eq!(
         test::call_service(&app, req).await.status(),
         StatusCode::FORBIDDEN
     );
+}
+
+// ── Legacy `/players` alias paths (0.4.1 transition) ──────────────────────────
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_player_via_legacy_path_still_works() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let username = unique_username();
+    let (player_id, token) = register_and_login(
+        pool.clone(),
+        mgr.clone(),
+        cfg.clone(),
+        &username,
+        "pass12345",
+    )
+    .await;
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool))
+            .app_data(web::Data::new(mgr))
+            .configure(api::auth::config)
+            .configure(api::players::config),
+    )
+    .await;
+
+    // Legacy unprefixed mount must serve the same profile as `/v1`.
+    let req = test::TestRequest::get()
+        .uri(&format!("/players/{player_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["id"], player_id);
+    assert_eq!(body["username"], username);
 }
