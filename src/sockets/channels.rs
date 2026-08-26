@@ -2,14 +2,17 @@
 //!
 //! Tracks which player aliases are members of which channels and broadcasts
 //! the Talo `v1.channels.player-joined` / `v1.channels.player-left` envelopes
-//! to member connections when membership changes. A player joins when its
-//! first connection registers for a channel and leaves when its last
-//! connection drops, mirroring the presence hub's online/offline semantics.
+//! to member connections when membership changes, plus the
+//! `v1.channels.message` envelope when a member sends a chat message. A player
+//! joins when its first connection registers for a channel and leaves when its
+//! last connection drops, mirroring the presence hub's online/offline
+//! semantics.
 //!
 //! Upstream Talo drives channel membership over HTTP and only fans out the
-//! membership changes over sockets; `v1.channels.join` / `v1.channels.leave`
-//! are Playzoid request extensions (the only in-scope trigger while no
-//! channel persistence exists). The response envelopes stay Talo-verified.
+//! membership changes and messages over sockets; `v1.channels.join` /
+//! `v1.channels.leave` / `v1.channels.message` are Playzoid request extensions
+//! (the only in-scope trigger while no channel persistence exists). The
+//! response envelopes stay Talo-verified.
 
 use actix::prelude::*;
 use once_cell::sync::Lazy;
@@ -21,6 +24,10 @@ use std::collections::HashMap;
 /// leave is ever missed; exceeding it triggers a prune of dead recipients
 /// instead of failing the join.
 const MAX_CONNS_PER_MEMBER: usize = 256;
+
+/// Upper bound of an inbound chat message length in characters. Rejects
+/// oversize frames at the websocket layer before they can reach the hub.
+pub const MAX_CHAT_MESSAGE_CHARS: usize = 1000;
 
 /// Numeric `GameChannelLeavingReason::DEFAULT` (serialized as an integer, per
 /// the upstream TS numeric enum).
@@ -40,6 +47,33 @@ pub struct ChannelChange {
     pub joined: bool,
 }
 
+/// A chat message sent by one channel member, to be broadcast to every member
+/// connection in the channel (sender included).
+#[derive(Message, Clone)]
+#[rtype(result = "()")]
+pub struct ChannelMessage {
+    /// Channel the message belongs to.
+    pub channel_id: i64,
+    /// Player alias the message was sent from (always the server-resolved
+    /// socket-ticket alias, never a client-supplied id).
+    pub alias_id: i64,
+    /// The chat text, validated and length-capped at the websocket layer.
+    pub message: String,
+}
+
+/// A fan-out envelope a channel member connection can receive. A single
+/// recipient per connection is registered in the hub and reused for both the
+/// membership-change and chat-message fan-outs, so no connection needs to be
+/// tracked twice for the two envelope kinds.
+#[derive(Message, Clone)]
+#[rtype(result = "()")]
+pub enum ChannelNotification {
+    /// A membership transition (player joined / left).
+    Change(ChannelChange),
+    /// A chat message broadcast within the channel.
+    Message(ChannelMessage),
+}
+
 /// Register a connection under a player alias in a channel.
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -51,8 +85,8 @@ pub struct JoinChannel {
     pub alias_id: i64,
     /// Unique connection key so the same connection can be unregistered later.
     pub conn_key: usize,
-    /// Recipient to push subsequent channel changes to.
-    pub recipient: Recipient<ChannelChange>,
+    /// Recipient to push subsequent channel notifications (changes + messages).
+    pub recipient: Recipient<ChannelNotification>,
 }
 
 /// Remove a connection from a single channel.
@@ -78,7 +112,8 @@ pub struct LeaveAllChannels {
 }
 
 /// Connection registry keyed by channel id, then alias id, then conn key.
-type ChannelMemberships = HashMap<i64, HashMap<i64, HashMap<usize, Recipient<ChannelChange>>>>;
+type ChannelMemberships =
+    HashMap<i64, HashMap<i64, HashMap<usize, Recipient<ChannelNotification>>>>;
 
 /// Reverse index mapping a connection key to the memberships it holds, so a
 /// dropped connection can be unregistered in O(its channels) not O(all).
@@ -104,7 +139,19 @@ impl ChannelHub {
         if let Some(aliases) = self.channels.get(&channel_id) {
             for set in aliases.values() {
                 for recipient in set.values() {
-                    recipient.do_send(change.clone());
+                    recipient.do_send(ChannelNotification::Change(change.clone()));
+                }
+            }
+        }
+    }
+
+    /// Fan a chat message out to every connection currently in the channel,
+    /// the sender included (mirrors the membership fan-out).
+    fn broadcast_channel_message(&self, msg: &ChannelMessage) {
+        if let Some(aliases) = self.channels.get(&msg.channel_id) {
+            for set in aliases.values() {
+                for recipient in set.values() {
+                    recipient.do_send(ChannelNotification::Message(msg.clone()));
                 }
             }
         }
@@ -263,6 +310,41 @@ impl Handler<LeaveChannel> for ChannelHub {
     }
 }
 
+impl Handler<ChannelMessage> for ChannelHub {
+    type Result = ();
+
+    fn handle(&mut self, msg: ChannelMessage, _ctx: &mut Self::Context) {
+        // Drop dead recipients so a missed `LeaveAllChannels` cannot accumulate
+        // deliveries; a channel that lost every live connection behaves like an
+        // empty one and is dropped.
+        let emptied = match self.channels.get_mut(&msg.channel_id) {
+            Some(aliases) => {
+                for set in aliases.values_mut() {
+                    set.retain(|_, recipient| recipient.connected());
+                }
+                aliases.retain(|_, set| !set.is_empty());
+                aliases.is_empty()
+            }
+            None => return,
+        };
+        if emptied {
+            self.channels.remove(&msg.channel_id);
+            return;
+        }
+        // Only members may broadcast: a non-member's send is a silent no-op
+        // (mirrors the non-member leave no-op; there is no sender-reachable
+        // error channel yet, a v0 trade-off over Talo's rejection envelope).
+        let sender_is_member = self
+            .channels
+            .get(&msg.channel_id)
+            .is_some_and(|aliases| aliases.contains_key(&msg.alias_id));
+        if !sender_is_member {
+            return;
+        }
+        self.broadcast_channel_message(&msg);
+    }
+}
+
 impl Handler<LeaveAllChannels> for ChannelHub {
     type Result = ();
 
@@ -311,6 +393,21 @@ pub fn player_left_payload(channel_id: i64, alias_id: i64) -> Value {
     })
 }
 
+/// Build the Talo `v1.channels.message` envelope fanned out to channel members
+/// when a member sends a chat message. `message` is a plain string (the
+/// 0.3.10-era echo shape with `{id, from, message}` is dropped and the sender's
+/// `playerAlias` is carried instead, matching the verified upstream fan-out).
+pub fn channel_message_payload(channel_id: i64, alias_id: i64, message: &str) -> Value {
+    json!({
+        "res": "v1.channels.message",
+        "data": {
+            "channel": { "id": channel_id },
+            "message": message,
+            "playerAlias": { "id": alias_id },
+        },
+    })
+}
+
 /// Process-global channel hub shared by every connection in this process.
 ///
 /// The actor is started lazily on first use, so callers may only touch this
@@ -327,10 +424,19 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    /// Event list shared between a mock subscriber and the test body.
-    type ChannelEvents = Arc<Mutex<Vec<(i64, i64, bool)>>>;
+    /// A fan-out event a mock subscriber records.
+    #[derive(Debug, PartialEq, Eq, Clone)]
+    enum ChannelEvent {
+        /// A membership transition (`joined` bool last).
+        Change(i64, i64, bool),
+        /// A chat message broadcast (channel, sender alias, text).
+        Message(i64, i64, String),
+    }
 
-    /// Test subscriber recording every channel change it receives.
+    /// Event list shared between a mock subscriber and the test body.
+    type ChannelEvents = Arc<Mutex<Vec<ChannelEvent>>>;
+
+    /// Test subscriber recording every channel notification it receives.
     struct MockChannelSub {
         events: ChannelEvents,
     }
@@ -339,13 +445,18 @@ mod tests {
         type Context = Context<Self>;
     }
 
-    impl Handler<ChannelChange> for MockChannelSub {
+    impl Handler<ChannelNotification> for MockChannelSub {
         type Result = ();
-        fn handle(&mut self, msg: ChannelChange, _ctx: &mut Context<Self>) {
-            self.events
-                .lock()
-                .unwrap()
-                .push((msg.channel_id, msg.alias_id, msg.joined));
+        fn handle(&mut self, msg: ChannelNotification, _ctx: &mut Context<Self>) {
+            let event = match msg {
+                ChannelNotification::Change(change) => {
+                    ChannelEvent::Change(change.channel_id, change.alias_id, change.joined)
+                }
+                ChannelNotification::Message(message) => {
+                    ChannelEvent::Message(message.channel_id, message.alias_id, message.message)
+                }
+            };
+            self.events.lock().unwrap().push(event);
         }
     }
 
@@ -363,7 +474,7 @@ mod tests {
         }
     }
 
-    fn mock() -> (ChannelEvents, Recipient<ChannelChange>) {
+    fn mock() -> (ChannelEvents, Recipient<ChannelNotification>) {
         let events: ChannelEvents = Arc::new(Mutex::new(Vec::new()));
         let recipient = MockChannelSub {
             events: events.clone(),
@@ -374,7 +485,7 @@ mod tests {
     }
 
     /// Poll a subscriber until it has recorded `len` events (or fail).
-    async fn wait_events(events: &ChannelEvents, len: usize) -> Vec<(i64, i64, bool)> {
+    async fn wait_events(events: &ChannelEvents, len: usize) -> Vec<ChannelEvent> {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if events.lock().unwrap().len() >= len {
@@ -402,7 +513,7 @@ mod tests {
         .await
         .unwrap();
         let got = wait_events(&e1, 1).await;
-        assert_eq!(got, vec![(5, 1, true)]);
+        assert_eq!(got, vec![ChannelEvent::Change(5, 1, true)]);
     }
 
     #[actix::test]
@@ -452,10 +563,13 @@ mod tests {
         .await
         .unwrap();
         let got = wait_events(&b_events, 1).await;
-        assert_eq!(got, vec![(5, 2, true)]);
+        assert_eq!(got, vec![ChannelEvent::Change(5, 2, true)]);
         assert_eq!(
             wait_events(&a_events, 2).await,
-            vec![(5, 1, true), (5, 2, true)]
+            vec![
+                ChannelEvent::Change(5, 1, true),
+                ChannelEvent::Change(5, 2, true)
+            ]
         );
         let _ = c_events;
     }
@@ -485,8 +599,11 @@ mod tests {
         .await
         .unwrap();
         let got = wait_events(&a_events, 2).await;
-        assert_eq!(got[1], (5, 2, true));
-        assert_eq!(wait_events(&b_events, 1).await, vec![(5, 2, true)]);
+        assert_eq!(got[1], ChannelEvent::Change(5, 2, true));
+        assert_eq!(
+            wait_events(&b_events, 1).await,
+            vec![ChannelEvent::Change(5, 2, true)]
+        );
     }
 
     #[actix::test]
@@ -525,10 +642,13 @@ mod tests {
         // Survivor sees the leave; the departed conn sees nothing (it was
         // removed before the fan-out, so it never gets its own `player-left`).
         let got = wait_events(&remaining_events, 2).await;
-        assert_eq!(got[1], (5, 1, false));
+        assert_eq!(got[1], ChannelEvent::Change(5, 1, false));
         assert_eq!(
             *leaver_events.lock().unwrap(),
-            vec![(5, 1, true), (5, 2, true)],
+            vec![
+                ChannelEvent::Change(5, 1, true),
+                ChannelEvent::Change(5, 2, true)
+            ],
             "departed recipient must not receive its own leave broadcast"
         );
     }
@@ -587,7 +707,11 @@ mod tests {
         // member after one of its two conns leaves.
         assert_eq!(
             *a1_events.lock().unwrap(),
-            vec![(5, 1, true), (5, 2, true), (5, 2, true)],
+            vec![
+                ChannelEvent::Change(5, 1, true),
+                ChannelEvent::Change(5, 2, true),
+                ChannelEvent::Change(5, 2, true),
+            ],
             "alias 1 must still be a member after one of two conns leaves"
         );
     }
@@ -630,7 +754,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert_eq!(
             *sub_events.lock().unwrap(),
-            vec![(5, 1, true)],
+            vec![ChannelEvent::Change(5, 1, true)],
             "non-member leaves must produce no events"
         );
     }
@@ -685,9 +809,195 @@ mod tests {
         .await
         .unwrap();
         let chan5_got = wait_events(&chan5_events, 4).await;
-        assert_eq!(chan5_got[3], (5, 1, false));
+        assert_eq!(chan5_got[3], ChannelEvent::Change(5, 1, false));
         let chan9_got = wait_events(&chan9_events, 4).await;
-        assert_eq!(chan9_got[3], (9, 1, false));
+        assert_eq!(chan9_got[3], ChannelEvent::Change(9, 1, false));
+    }
+
+    #[actix::test]
+    async fn broadcast_message_fans_out_to_all_members() {
+        let hub = ChannelHub::new().start();
+        let (e1, r1) = mock();
+        let (e2, r2) = mock();
+        hub.send(JoinChannel {
+            channel_id: 5,
+            alias_id: 1,
+            conn_key: 10,
+            recipient: r1,
+        })
+        .await
+        .unwrap();
+        hub.send(JoinChannel {
+            channel_id: 5,
+            alias_id: 2,
+            conn_key: 20,
+            recipient: r2,
+        })
+        .await
+        .unwrap();
+        wait_events(&e1, 2).await;
+        wait_events(&e2, 1).await;
+
+        hub.send(ChannelMessage {
+            channel_id: 5,
+            alias_id: 1,
+            message: "hi".to_string(),
+        })
+        .await
+        .unwrap();
+        wait_events(&e1, 3).await;
+        wait_events(&e2, 2).await;
+        assert_eq!(
+            *e1.lock().unwrap(),
+            vec![
+                ChannelEvent::Change(5, 1, true),
+                ChannelEvent::Change(5, 2, true),
+                ChannelEvent::Message(5, 1, "hi".to_string()),
+            ],
+            "the sender's own connection must receive its message too"
+        );
+        assert_eq!(
+            *e2.lock().unwrap(),
+            vec![
+                ChannelEvent::Change(5, 2, true),
+                ChannelEvent::Message(5, 1, "hi".to_string()),
+            ]
+        );
+    }
+
+    #[actix::test]
+    async fn broadcast_message_reaches_each_conn_once() {
+        let hub = ChannelHub::new().start();
+        // Alias 1 holds two connections, each with its own subscriber; alias 2
+        // is a second member. The alias 2 join fan-out reaches both of alias
+        // 1's conns; a message from alias 1 must also reach each conn exactly
+        // once (one envelope per conn key, never a merged or double delivery).
+        let (a1c1_events, a1c1) = mock();
+        let (a1c2_events, a1c2) = mock();
+        let (a2_events, a2) = mock();
+        hub.send(JoinChannel {
+            channel_id: 5,
+            alias_id: 1,
+            conn_key: 10,
+            recipient: a1c1,
+        })
+        .await
+        .unwrap();
+        hub.send(JoinChannel {
+            channel_id: 5,
+            alias_id: 1,
+            conn_key: 11,
+            recipient: a1c2,
+        })
+        .await
+        .unwrap();
+        hub.send(JoinChannel {
+            channel_id: 5,
+            alias_id: 2,
+            conn_key: 20,
+            recipient: a2,
+        })
+        .await
+        .unwrap();
+        // conn 10 saw its own alias's join + alias 2's join; conn 11 (joined an
+        // already-member alias silently) and alias 2 only saw alias 2's join.
+        wait_events(&a1c1_events, 2).await;
+        wait_events(&a1c2_events, 1).await;
+        wait_events(&a2_events, 1).await;
+
+        hub.send(ChannelMessage {
+            channel_id: 5,
+            alias_id: 1,
+            message: "hey".to_string(),
+        })
+        .await
+        .unwrap();
+        wait_events(&a1c1_events, 3).await;
+        wait_events(&a1c2_events, 2).await;
+        wait_events(&a2_events, 2).await;
+        assert_eq!(
+            *a1c1_events.lock().unwrap(),
+            vec![
+                ChannelEvent::Change(5, 1, true),
+                ChannelEvent::Change(5, 2, true),
+                ChannelEvent::Message(5, 1, "hey".to_string()),
+            ],
+            "alias 1 conn 10 must receive the message once"
+        );
+        assert_eq!(
+            *a1c2_events.lock().unwrap(),
+            vec![
+                ChannelEvent::Change(5, 2, true),
+                ChannelEvent::Message(5, 1, "hey".to_string()),
+            ],
+            "alias 1 conn 11 must receive the message once"
+        );
+        assert_eq!(
+            *a2_events.lock().unwrap(),
+            vec![
+                ChannelEvent::Change(5, 2, true),
+                ChannelEvent::Message(5, 1, "hey".to_string()),
+            ]
+        );
+    }
+
+    #[actix::test]
+    async fn broadcast_message_unknown_channel_is_noop() {
+        let hub = ChannelHub::new().start();
+        let (sub_events, sub) = mock();
+        hub.send(JoinChannel {
+            channel_id: 5,
+            alias_id: 1,
+            conn_key: 10,
+            recipient: sub,
+        })
+        .await
+        .unwrap();
+        wait_events(&sub_events, 1).await;
+
+        hub.send(ChannelMessage {
+            channel_id: 99,
+            alias_id: 1,
+            message: "hi".to_string(),
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(
+            *sub_events.lock().unwrap(),
+            vec![ChannelEvent::Change(5, 1, true)],
+            "sending into an unknown channel must produce no events"
+        );
+    }
+
+    #[actix::test]
+    async fn broadcast_message_non_member_send_is_noop() {
+        let hub = ChannelHub::new().start();
+        let (sub_events, sub) = mock();
+        hub.send(JoinChannel {
+            channel_id: 5,
+            alias_id: 1,
+            conn_key: 10,
+            recipient: sub,
+        })
+        .await
+        .unwrap();
+        wait_events(&sub_events, 1).await;
+
+        // Alias 99 is not a member of channel 5; its message reaches nobody.
+        hub.send(ChannelMessage {
+            channel_id: 5,
+            alias_id: 99,
+            message: "hi".to_string(),
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(
+            *sub_events.lock().unwrap(),
+            vec![ChannelEvent::Change(5, 1, true)],
+            "a non-member send must be a silent no-op"
+        );
     }
 
     /// Load test: 100 connections, 1000 membership broadcasts, 0 dropped
@@ -758,6 +1068,79 @@ mod tests {
             expected_leaver,
             "leaver must receive exactly one join per cycle and never its own leave"
         );
+    }
+
+    /// Load test: 100 member connections, 1000 chat broadcasts, 0 dropped or
+    /// double-delivered envelopes. 100 members register in one channel
+    /// (cumulative 5050 `joined` events), then member alias 1 sends 1000 chat
+    /// messages; each fan-outs to all 100 member conn keys, sender included
+    /// (100k deliveries). The exact final count proves nothing was dropped or
+    /// delivered twice.
+    #[actix::test]
+    async fn load_100_conns_1000_chat_broadcasts_0_drops() {
+        let hub = ChannelHub::new().start();
+        const CONNS: usize = 100;
+        const MSGS: usize = 1000;
+
+        let (member_events, member_recv) = mock();
+
+        for i in 0..CONNS {
+            hub.send(JoinChannel {
+                channel_id: 5,
+                alias_id: i as i64 + 1,
+                conn_key: i,
+                recipient: member_recv.clone(),
+            })
+            .await
+            .unwrap();
+        }
+
+        // Setup fan-out is cumulative: the k-th alias's join reaches k members.
+        let setup_events = (1..=CONNS).sum::<usize>();
+
+        for _ in 0..MSGS {
+            hub.send(ChannelMessage {
+                channel_id: 5,
+                alias_id: 1,
+                message: "hi".to_string(),
+            })
+            .await
+            .unwrap();
+        }
+
+        let expected = setup_events + MSGS * CONNS;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if member_events.lock().unwrap().len() >= expected {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {expected} chat events; got {:?}",
+                member_events.lock().unwrap().len()
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(
+            member_events.lock().unwrap().len(),
+            expected,
+            "100 member conns, {MSGS} chat broadcasts, 0 dropped or double-delivered envelopes"
+        );
+    }
+
+    #[actix::test]
+    async fn channel_message_payload_shape() {
+        let payload = channel_message_payload(5, 1, "hi");
+        assert_eq!(payload["res"], "v1.channels.message");
+        assert_eq!(payload["data"]["channel"]["id"].as_i64(), Some(5));
+        assert_eq!(
+            payload["data"]["message"].as_str(),
+            Some("hi"),
+            "message must be a plain string, not an object"
+        );
+        assert_eq!(payload["data"]["playerAlias"]["id"].as_i64(), Some(1));
     }
 
     #[actix::test]

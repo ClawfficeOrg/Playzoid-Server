@@ -103,3 +103,34 @@ no such request (membership is HTTP-driven); response envelopes stay 100%
 Talo-verified (decision recorded in `docs/memory.md`, surfaced here per the
 do-not-guess rule). Gate checks (`fmt --check` / `clippy -D warnings` /
 `test`) pass. Commit/push/PR deferred by operator instruction.
+
+## 2026-08-25 22:04
+
+DONE: 0.3.12 merged into release/v0.3.
+
+## 2026-08-25 22:41
+
+IMPLEMENTED: 0.3.13 (WebSocket chat message broadcast within channel) on
+task/0.3.13. `ChannelHub` now fans a verified-Talo `v1.channels.message`
+envelope (`{ res, data: { channel: { id }, message: <string>, playerAlias: { id } } }`)
+to every member socket, sender included, via a joint `ChannelNotification`
+enum (`Change | Message`) stored once per connection — a single registry
+carries both the 0.3.12 join/leave and chat fan-outs, no duplicate
+bookkeeping. Upstream shape re-verified against
+`TaloDev/backend/src/socket/listeners/gameChannelListeners.ts` (fan-out to all
+members incl. sender; message is a plain string; non-member send rejected
+upstream). ws layer: `v1.channels.message` becomes an identify-gated `&self`
+method validating integer `channelId` + non-empty message ≤
+`MAX_CHAT_MESSAGE_CHARS` (1000), sender alias stamped from the server-resolved socket
+ticket only (spoofed `playerAliasId` claims ignored); `FrameOutcome` gains
+`BroadcastMessage`; `WsConn` implements `Handler<ChannelNotification>`;
+`MSG_SEQ`/echo message-id shape dropped. **Documented deviations:** (1) the
+request field is `channelId` (Playzoid socket extension like 0.3.12 join/leave;
+upstream nests `channel.id`), response envelope stays Talo-verified; (2)
+non-member send or unknown/empty channel is a silent no-op instead of Talo's
+"Player not in channel" rejection — no sender-reachable error channel in v0
+(both recorded in `docs/memory.md`, surfaced here per the do-not-guess rule).
+Load test: 100 conns × 1000 chat broadcasts, 0 dropped/double-delivered.
+Gate checks (`fmt --check` / `clippy -D warnings` / `test`) pass. Commit/push/PR
+deferred by operator instruction — todo-v0.md flipped to `- [x]` with a done
+note pending PR.

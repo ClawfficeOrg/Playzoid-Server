@@ -114,9 +114,10 @@ connections.
 - [x] `0.3.12` WebSocket: channel join/leave message types.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
-- [ ] `0.3.13` WebSocket: chat message broadcast within channel.
+- [x] `0.3.13` WebSocket: chat message broadcast within channel.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
+  <!-- 0.3.13 done note: implemented 2026-08-25 on task/0.3.13; ChannelHub broadcasts verified-Talo `v1.channels.message` (channel.id, string message, sender playerAlias.id) to every member incl. sender via a joint ChannelNotification registry (one Recipient per conn for join/leave + chat); ws layer validate+gates (identify first, integer channelId, non-empty message <= 1000 chars), sender alias always ticketed/spoof-proof; non-member or unknown-channel send = silent no-op (v0 trade-off); load test 100 conns x 1000 chat broadcasts, 0 drops; pending commit + PR + release/v0.3 merge -->
 - [ ] `0.3.14` WebSocket: subaccount participant support (parent_account_id grouping).
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
