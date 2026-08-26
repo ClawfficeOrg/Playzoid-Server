@@ -1,17 +1,95 @@
 //! `/saves` HTTP endpoints.
 //!
-//! `GET /saves/{player_id}` — list the authenticated player's game saves, newest
-//! first (auth required). Saves are private per-player game state — unlike
-//! profile reads this endpoint only ever returns the caller's own saves.
+//! `POST /saves`                 — create a game save (auth required).
+//! `GET  /saves/{player_id}`     — list the authenticated player's game saves,
+//!                                 newest first (auth required). Saves are
+//!                                 private per-player game state — unlike
+//!                                 profile reads these endpoints only ever
+//!                                 touch the caller's own saves.
 
 use crate::middleware::auth::AuthenticatedUser;
 use crate::services::saves::{self as saves_svc, SaveServiceError};
 use actix_web::{HttpResponse, web};
+use serde::Deserialize;
 use sqlx::MySqlPool;
+use validator::Validate;
 
 /// Register the `/saves` HTTP routes.
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/saves").route("/{player_id}", web::get().to(list_saves)));
+    cfg.service(
+        web::scope("/saves")
+            .route("", web::post().to(create_save))
+            .route("/{player_id}", web::get().to(list_saves)),
+    );
+}
+
+/// Request body for creating a game save.
+///
+/// Mirrors the verified Talo `CreateSaveRequest` shape (`playerId` optional —
+/// defaults to the JWT identity; a supplied value must match it).
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateSaveRequest {
+    /// Human-readable save name, 1..=255 characters.
+    #[validate(length(min = 1, max = 255))]
+    pub name: String,
+    /// Optional owning player — must equal the JWT identity when supplied.
+    pub player_id: Option<String>,
+    /// Arbitrary game-state JSON blob (must not be JSON `null`).
+    pub save: serde_json::Value,
+    /// Optional game-specific metadata.
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Create a game save for the authenticated player.
+///
+/// `playerId` in the body is optional: absent, it defaults to the JWT
+/// identity; present, it must match the JWT (403 otherwise). This preserves
+/// the 0.3.6 own-only property while staying compatible with clients that
+/// send the Talo-shaped `playerId`. Unknown or soft-deleted players return
+/// 404; invalid bodies return 400. Returns 201 with the stored `SaveView`.
+#[tracing::instrument(skip(pool, user))]
+async fn create_save(
+    pool: Option<web::Data<MySqlPool>>,
+    user: AuthenticatedUser,
+    body: web::Json<CreateSaveRequest>,
+) -> HttpResponse {
+    if let Err(e) = body.validate() {
+        return HttpResponse::BadRequest().json(error_body(&format!("validation: {e}")));
+    }
+
+    // Ownership check before the pool check so cross-player requests fail fast.
+    let owning_player = match body.player_id.as_deref() {
+        Some(pid) if pid != user.player_public_id => {
+            return HttpResponse::Forbidden()
+                .json(error_body("you may only create your own saves"));
+        }
+        _ => user.player_public_id.clone(),
+    };
+
+    let Some(pool) = pool else {
+        return HttpResponse::ServiceUnavailable().json(error_body("database unavailable"));
+    };
+
+    match saves_svc::create_save(
+        pool.get_ref(),
+        &owning_player,
+        &body.name,
+        &body.save,
+        body.metadata.as_ref(),
+    )
+    .await
+    {
+        Ok(view) => HttpResponse::Created().json(view),
+        Err(SaveServiceError::Invalid(msg)) => HttpResponse::BadRequest().json(error_body(&msg)),
+        Err(SaveServiceError::NotFound) => {
+            HttpResponse::NotFound().json(error_body("player not found"))
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "create_save failed");
+            HttpResponse::InternalServerError().json(error_body("internal error"))
+        }
+    }
 }
 
 /// List all saves owned by the authenticated player, newest first.
@@ -124,5 +202,164 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── POST /saves ────────────────────────────────────────────────────────
+
+    #[actix_web::test]
+    async fn create_save_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .set_json(serde_json::json!({
+                "name": "slot-1",
+                "save": { "hp": 100 }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn create_save_cross_player_returns_403() {
+        // Ownership check runs before the pool check — no pool is registered.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "name": "slot-1",
+                "playerId": "player-uuid-2",
+                "save": { "hp": 100 }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn create_save_matching_player_id_passes_ownership() {
+        // Matching playerId passes ownership, then hits the missing pool → 503.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "name": "slot-1",
+                "playerId": "player-uuid-1",
+                "save": { "hp": 100 }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[actix_web::test]
+    async fn create_save_without_pool_returns_503() {
+        // Omitted playerId defaults to the JWT identity and reaches the pool check.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "name": "slot-1",
+                "save": { "hp": 100 }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[actix_web::test]
+    async fn create_save_rejects_unknown_fields() {
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "name": "slot-1",
+                "save": { "hp": 100 },
+                "bogus": true
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn create_save_rejects_empty_name() {
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "name": "",
+                "save": { "hp": 100 }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn create_save_rejects_oversized_save() {
+        // Service-level size validation fires before any SQL, so a lazy
+        // (never-connecting) pool is safe to register here.
+        let token = valid_token("player-uuid-1");
+        let pool = sqlx::MySqlPool::connect_lazy("mysql://test:test@127.0.0.1/test")
+            .expect("lazy pool creation should not fail");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .app_data(web::Data::new(pool))
+                .configure(config),
+        )
+        .await;
+        let big = serde_json::json!({ "data": "x".repeat(saves_svc::MAX_SAVE_BYTES) });
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "name": "slot-1",
+                "save": big
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

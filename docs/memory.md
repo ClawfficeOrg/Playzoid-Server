@@ -116,6 +116,37 @@ to `docs/memory.md` as part of the standard repo layout.
 
 ---
 
+### 2026-08-25 — Save creation is own-only with an optional Talo-shaped `playerId`
+
+- **Context:** Task 0.3.7 adds `POST /saves`. Talo's verified `CreateSaveRequest`
+  carries a `playerId` field, but the 0.3.6 decision made saves private
+  per-player (own-only reads).
+- **Options considered:**
+  - Trust a required `playerId` from the body — lets any caller create saves
+    for arbitrary players.
+  - Ignore `playerId` entirely — breaks Talo SDK client compatibility (they
+    send it).
+  - Optional `playerId` validated against the JWT — accept when it matches,
+    403 when it differs, default to the JWT identity when absent.
+- **Decision:** `playerId` stays optional and is validated against the JWT
+  identity (403 on mismatch); `None` defaults to the caller, so creation can
+  never target another player. Combined serialized `save` + `metadata` is
+  capped at 32 KiB (`MAX_SAVE_BYTES`) — under InnoDB's 65,535-byte row limit
+  and mirroring the `MAX_PROPS_BYTES` precedent. JSON `null` save blobs are
+  rejected up-front so the NOT NULL column never surfaces a misleading 500.
+  Create reuses the 0.3.6 `SaveView` projection; an insert `public_id` UUID
+  collision retries once with a fresh UUID.
+- **Consequences:**
+  - The API layer raises body-validation 400s (unknown fields, empty/malformed
+    name) before the ownership 403 check, which itself precedes the
+    pool-unavailable 503; the service re-validates (trimmed name, null blob,
+    size cap) before any SQL, so those 400s beat SQL-time failures (404
+    player-not-found, 500) whenever a pool is present.
+  - Delete (0.3.9) and single-save retrieval (0.3.8) follow the same own-only
+    + `SaveView` conventions.
+
+---
+
 <!-- Append new decisions below this line. Use the dated heading format above. -->
 
 ---
