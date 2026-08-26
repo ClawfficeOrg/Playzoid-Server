@@ -104,7 +104,7 @@ connections.
   Complexity: Small. Owned paths: same as 0.3.6.
   Agent: basic_dev_agent
   <!-- 0.3.9 done note: implemented 2026-08-25 on task/0.3.9; own-only (403 cross-player) + 204 No Content; player-scoped DELETE so other players' saves / unknown ids 404 (never leak); pending PR + release/v0.3 merge -->
-- [ ] `0.3.10` Implement WebSocket `/ws` handler with actix-web WS upgrade.
+- [x] `0.3.10` Implement WebSocket `/ws` handler with actix-web WS upgrade.
   Complexity: High. Owned paths: `src/sockets/ws.rs`.
   Agent: pro_dev_agent
 - [ ] `0.3.11` WebSocket: player connect/disconnect presence broadcast.
