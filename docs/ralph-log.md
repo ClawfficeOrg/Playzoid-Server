@@ -348,3 +348,7 @@ DONE: 0.4.6 merged into release/v0.4.
 ## 2026-08-26 07:46
 
 DONE: 0.4.7 implemented on task/0.4.7 — POST /v1/feedback. Feedback stored as name="feedback" rows in the existing append-only analytics_events table (owned paths exclude migrations/entities; sink-reuse decision + dedicated-table Phase 1.0 candidate recorded in memory.md). Honest-failure contract: post-validation DB failure → 500 (divergence from fire-and-forget events, user content must not be silently dropped). Pre-SQL validation: trimmed message 1..=1000 chars, encoded props ≤4KiB. Best-effort attribution, static bound INSERT. Unit tests API 10 + service 7 same-file; tests/feedback_integration.rs 5 #[ignore] (live Docker stack). Wired mods + main.rs one-liner outside owned paths (same accepted deviation as 0.4.4/0.4.6). cargo fmt/clippy/test green (215 passed). No commit/PR per session instructions.
+
+## 2026-08-26 07:55
+
+DONE: 0.4.7 merged into release/v0.4.

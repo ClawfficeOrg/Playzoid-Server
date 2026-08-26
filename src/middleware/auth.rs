@@ -100,6 +100,7 @@ fn extract_bearer_token(req: &HttpRequest) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RateLimitConfig;
     use crate::services::auth as auth_svc;
     use actix_web::{App, HttpResponse, http::StatusCode, test, web};
 
@@ -113,6 +114,7 @@ mod tests {
             redis_url: "redis://test".into(),
             jwt_secret: SECRET.into(),
             jwt_expiry_secs: 3600,
+            rate_limit: RateLimitConfig::default(),
         }
     }
 

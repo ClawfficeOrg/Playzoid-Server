@@ -9,7 +9,12 @@
 
 use actix_web::{App, http::StatusCode, test, web};
 use chrono::{DateTime, Utc};
-use playzoid_server::{api, config::Config, db, services::events::MAX_BATCH_EVENTS};
+use playzoid_server::{
+    api,
+    config::{Config, RateLimitConfig},
+    db,
+    services::events::MAX_BATCH_EVENTS,
+};
 use redis::aio::ConnectionManager;
 use serde_json::Value;
 use sqlx::MySqlPool;
@@ -36,6 +41,7 @@ async fn test_fixtures() -> (MySqlPool, ConnectionManager, Config) {
         redis_url,
         jwt_secret: JWT_SECRET.into(),
         jwt_expiry_secs: 3600,
+        rate_limit: RateLimitConfig::default(),
     };
     (pool, mgr, cfg)
 }
