@@ -881,3 +881,125 @@ async fn delete_save_soft_deleted_player_returns_404() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// ── Gap-fill tests (task 0.3.16) ──────────────────────────────────────────────
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn create_save_rejects_null_save_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = saves_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::post()
+        .uri("/saves")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "name": "slot-1", "save": null }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn create_save_rejects_oversized_name_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = saves_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::post()
+        .uri("/saves")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({
+            "name": "x".repeat(256),
+            "save": { "hp": 100 }
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn create_save_accepts_max_length_name_returns_201() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = saves_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::post()
+        .uri("/saves")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({
+            "name": "x".repeat(255),
+            "save": { "hp": 100 }
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["name"], "x".repeat(255));
+    assert_eq!(body["playerId"], pid);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn create_save_rejects_oversized_metadata_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = saves_app!(pool, mgr, cfg);
+
+    // save fits alone, but metadata pushes the combined size over the cap.
+    let big_metadata =
+        serde_json::json!({ "zone": "x".repeat(playzoid_server::services::saves::MAX_SAVE_BYTES) });
+    let req = test::TestRequest::post()
+        .uri("/saves")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({
+            "name": "slot-1",
+            "save": { "hp": 100 },
+            "metadata": big_metadata
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn delete_save_twice_second_delete_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let save_id = seed_save(
+        &pool,
+        &pid,
+        "slot-1",
+        serde_json::json!({ "hp": 100 }),
+        None,
+        "2026-08-25 09:00:00",
+    )
+    .await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let del = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, del).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // Second delete of the same save → 404 (idempotency boundary).
+    let del = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, del).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
