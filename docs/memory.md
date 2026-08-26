@@ -180,6 +180,45 @@ Message ids are timestamp + atomic counter (unique within the same second).
 
 ---
 
+## 2026-08-25 — Socket presence = single-process in-memory hub, register-on-identify (task 0.3.11)
+
+**Context:** Task 0.3.11 adds the Talo `v1.players.presence.updated` broadcast
+for player connect/disconnect. Upstream fires presence from the socket layer:
+`player.setPresence(true)` when a player identifies, `setPresence(false)` when
+their connection closes, envelope
+`{ presence: { playerAlias, online, customStatus, lastSeenAt }, meta: { onlineChanged, customStatusChanged } }`
+fanned out to all connected authed conns.
+
+**Options considered:**
+- Register on ticket-authenticated connect (earliest possible) — announces
+  "online" for sockets that may never identify; deviates from Talo timing.
+- Register on successful `v1.players.identify` (chosen, Talo parity) — a
+  presence registration is armed only when the client actually claims its
+  alias; the same boolean gates the `stopping()`-issued leave.
+- Shared store / pub-sub (Redis) — multi-node correct but out of scope for v0
+  and would force `main.rs` + Cargo wiring outside this task's owned path.
+
+**Decision:** Single-process actix `PresenceHub` actor, process-global via a
+`Lazy` accessor in `src/sockets/presence.rs`. Registry is
+`alias → { conn_key → Recipient<PresenceChange> }`; `online` fires on the
+alias's first identified connection, `offline` on the last disconnect, fanned
+out to all registered recipients. `alias_id` in the registry always comes from
+the server-resolved socket ticket — never a client-supplied id — so presence
+cannot be spoofed. Connections get a unique `conn_key` (atomically assigned)
+so a dropped socket is unregistered exactly once via `stopping()`.
+
+**Consequences:**
+- Single-node only: multi-instance deployments need a shared presence store
+  (follow-up, tracked with the multi-node work). `customStatus` is accepted in
+  the envelope shape but fixed to `null` / `customStatusChanged: false`
+  (follow-up).
+- Per-alias cap (256 conns) prunes dead recipients so a missed
+  `LeavePresence` cannot grow the registry without bound.
+- Tests exercise the hub directly (mock recipients) and the wire path through
+  pure ws.rs helpers; no live stack required.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
