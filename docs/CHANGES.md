@@ -2,6 +2,16 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — WebSocket presence broadcast (task 0.3.11)
+
+### Added
+- `src/sockets/presence.rs` — new in-memory `PresenceHub` actix actor with `JoinPresence` / `LeavePresence` / `PresenceChange` messages plus the `presence_payload` envelope builder. A player goes `online` when its first identified connection appears and `offline` when its last connection drops; both transitions fan out the Talo-shaped `v1.players.presence.updated` envelope (`presence.playerAlias.id`, `presence.online`, `presence.lastSeenAt`, `meta.onlineChanged`) to every connected socket. Alias ids only ever come from the server-resolved socket ticket — client claims are rejected. Connections are tracked per alias by a unique `conn_key`; the disconnect path (`stopping()`) unregisters via `LeavePresence`, so offline fires exactly on the last disconnect. A per-alias cap (256 conns) prunes dead recipients to bound memory. Process-global `hub()` accessor needs no `main.rs` wiring.
+- `src/sockets/ws.rs` — `WsConn` now carries a unique `conn_key` + `identified` flag; presence registration fires on `v1.players.identify` success (recipient = the connection's own address), matching Talo timing, and `stopping()` unregisters only if the connection had identified. `process_text_frame` became a `&mut self` method that also reports whether the frame armed a presence join.
+- Hub unit tests: online/offline transition fan-out (including to non-transitioning subscribers being excluded), offline-only-on-last-disconnect refcounting, unsubscribe stops delivery, unknown-alias leave ignored, payload shape. `ws.rs` unit tests: identify marks the connection identified / error paths don't, presence alias comes from the resolved ticket (never a body claim), leave arm-only-when-identified.
+- `tests/ws_integration.rs` — upgrade still returns 101 with a valid `?ticket=` (plus the existing no-ticket 101 and method-mismatch cases).
+
+---
+
 ## [Unreleased] — 2026-08-25 — WebSocket `/ws` handler (task 0.3.10)
 
 ### Added

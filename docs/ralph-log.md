@@ -77,3 +77,7 @@ done note pending PR.
 ## 2026-08-25 21:22
 
 DONE: 0.3.9 merged into release/v0.3.
+
+## 2026-08-25 21:29
+
+DONE: 0.3.10 merged into release/v0.3.

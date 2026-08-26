@@ -2,23 +2,115 @@ use actix::prelude::*;
 use actix_web::{Error, HttpRequest, HttpResponse, web};
 use actix_web_actors::ws;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use tracing::instrument;
+
+use crate::sockets::presence::{self, JoinPresence, LeavePresence};
 
 /// Monotonic counter paired with a timestamp so message ids stay unique
 /// even when several messages are routed within the same second.
 static MSG_SEQ: AtomicI64 = AtomicI64::new(0);
 
+/// Monotonic counter giving each connection a unique presence key.
+static CONN_SEQ: AtomicUsize = AtomicUsize::new(0);
+
 /// Actor handling a single WebSocket connection.
 pub struct WsConn {
     /// Authenticated player alias id resolved from the socket ticket on connect.
     pub alias_id: Option<i64>,
+    /// Unique id for this connection, used to unregister presence on drop.
+    conn_key: usize,
+    /// True once the client has successfully identified as the ticketed alias.
+    identified: bool,
+}
+
+impl WsConn {
+    /// Presence message to send when this connection drops, if one was ever
+    /// registered (i.e. the client completed a successful identify).
+    fn leave_presence(&self) -> Option<LeavePresence> {
+        let alias_id = self.alias_id?;
+        self.identified.then_some(LeavePresence {
+            alias_id,
+            conn_key: self.conn_key,
+        })
+    }
+
+    /// Handle a `v1.players.identify` request against the ticketed alias id.
+    ///
+    /// Returns the response envelope together with whether the client just
+    /// became identified, in which case the caller arms a presence join.
+    fn handle_players_identify(&mut self, data: &Value) -> (Value, bool) {
+        let Some(alias_id) = self.alias_id else {
+            return (
+                error_payload(
+                    "INVALID_INPUT",
+                    "playerAliasId does not match authenticated ticket",
+                ),
+                false,
+            );
+        };
+        match data.get("playerAliasId").and_then(|v| v.as_i64()) {
+            None => (
+                error_payload("INVALID_INPUT", "playerAliasId is required"),
+                false,
+            ),
+            Some(id) if id != alias_id => (
+                error_payload(
+                    "INVALID_INPUT",
+                    "playerAliasId does not match authenticated ticket",
+                ),
+                false,
+            ),
+            Some(id) => {
+                self.identified = true;
+                (
+                    json!({
+                        "res": "v1.players.identify.success",
+                        "data": {
+                            "aliasId": id,
+                            "playerId": format!("player-{}", id),
+                        }
+                    }),
+                    true,
+                )
+            }
+        }
+    }
+
+    /// Process a single inbound text frame.
+    ///
+    /// Returns the response envelopes to send back plus whether the frame
+    /// completed a successful identify (in which case a presence join should
+    /// be armed for this connection).
+    fn process_text_frame(&mut self, txt: &str) -> (Vec<Value>, bool) {
+        let v: Value = match serde_json::from_str(txt) {
+            Ok(v) => v,
+            Err(e) => return (vec![error_payload("INVALID_JSON", e.to_string())], false),
+        };
+        let req = v.get("req").and_then(|r| r.as_str()).unwrap_or("");
+        let data = v.get("data").cloned().unwrap_or(json!({}));
+        match req {
+            "v1.players.identify" => {
+                let (response, identified) = self.handle_players_identify(&data);
+                (vec![response], identified)
+            }
+            "v1.channels.message" => (vec![handle_channels_message(&data)], false),
+            _ => (
+                vec![error_payload(
+                    "UNHANDLED_REQUEST",
+                    format!("Unknown req: {}", req),
+                )],
+                false,
+            ),
+        }
+    }
 }
 
 impl Actor for WsConn {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
+        self.conn_key = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
         if self.alias_id.is_none() {
             // Reject unauthenticated connections with the Talo error envelope.
             write_payload(
@@ -28,6 +120,21 @@ impl Actor for WsConn {
             ctx.close(Some(ws::CloseCode::Policy.into()));
             ctx.stop();
         }
+    }
+
+    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        if let Some(leave) = self.leave_presence() {
+            presence::hub().do_send(leave);
+        }
+        Running::Stop
+    }
+}
+
+impl Handler<presence::PresenceChange> for WsConn {
+    type Result = ();
+
+    fn handle(&mut self, msg: presence::PresenceChange, ctx: &mut Self::Context) {
+        write_payload(ctx, &presence::presence_payload(msg.alias_id, msg.online));
     }
 }
 
@@ -43,30 +150,6 @@ fn error_payload(code: &str, message: impl ToString) -> Value {
 fn write_payload(ctx: &mut ws::WebsocketContext<WsConn>, payload: &Value) {
     if let Ok(s) = serde_json::to_string(payload) {
         ctx.text(s);
-    }
-}
-
-/// Handle a `v1.players.identify` request against the ticketed alias id.
-fn handle_players_identify(alias_id: Option<i64>, data: &Value) -> Value {
-    let Some(alias_id) = alias_id else {
-        return error_payload(
-            "INVALID_INPUT",
-            "playerAliasId does not match authenticated ticket",
-        );
-    };
-    match data.get("playerAliasId").and_then(|v| v.as_i64()) {
-        None => error_payload("INVALID_INPUT", "playerAliasId is required"),
-        Some(id) if id != alias_id => error_payload(
-            "INVALID_INPUT",
-            "playerAliasId does not match authenticated ticket",
-        ),
-        Some(id) => json!({
-            "res": "v1.players.identify.success",
-            "data": {
-                "aliasId": id,
-                "playerId": format!("player-{}", id),
-            }
-        }),
     }
 }
 
@@ -98,22 +181,6 @@ fn handle_channels_message(data: &Value) -> Value {
     })
 }
 
-/// Process a single inbound text frame and return the response envelopes to send back.
-fn process_text_frame(alias_id: Option<i64>, txt: &str) -> Vec<Value> {
-    let v: Value = match serde_json::from_str(txt) {
-        Ok(v) => v,
-        Err(e) => return vec![error_payload("INVALID_JSON", e.to_string())],
-    };
-    let req = v.get("req").and_then(|r| r.as_str()).unwrap_or("");
-    let data = v.get("data").cloned().unwrap_or(json!({}));
-    let response = match req {
-        "v1.players.identify" => handle_players_identify(alias_id, &data),
-        "v1.channels.message" => handle_channels_message(&data),
-        _ => error_payload("UNHANDLED_REQUEST", format!("Unknown req: {}", req)),
-    };
-    vec![response]
-}
-
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
     fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match msg {
@@ -123,7 +190,21 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                     ctx.text("v1.heartbeat");
                     return;
                 }
-                for payload in process_text_frame(self.alias_id, &txt) {
+                let (payloads, just_identified) = self.process_text_frame(&txt);
+                if just_identified {
+                    // Register presence with the ticketed alias (never the
+                    // client-supplied id) so this socket receives broadcast
+                    // `v1.players.presence.updated` envelopes and the alias
+                    // is announced online.
+                    if let Some(alias_id) = self.alias_id {
+                        presence::hub().do_send(JoinPresence {
+                            alias_id,
+                            conn_key: self.conn_key,
+                            recipient: ctx.address().recipient(),
+                        });
+                    }
+                }
+                for payload in payloads {
                     write_payload(ctx, &payload);
                 }
             }
@@ -155,91 +236,167 @@ pub async fn ws_index(r: HttpRequest, stream: web::Payload) -> Result<HttpRespon
     let alias_id = ticket_opt
         .as_deref()
         .and_then(crate::sockets::tickets::verify_ticket);
-    ws::start(WsConn { alias_id }, &r, stream)
+    ws::start(
+        WsConn {
+            alias_id,
+            conn_key: 0,
+            identified: false,
+        },
+        &r,
+        stream,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Build a conn with the fields set for unit testing.
+    fn conn(alias_id: Option<i64>) -> WsConn {
+        WsConn {
+            alias_id,
+            conn_key: 7,
+            identified: false,
+        }
+    }
+
+    /// Process a frame, discarding the just-identified flag.
+    fn frames(alias_id: Option<i64>, txt: &str) -> Vec<Value> {
+        conn(alias_id).process_text_frame(txt).0
+    }
+
     #[test]
     fn identify_success_maps_alias_id() {
-        let frames = process_text_frame(
-            Some(42),
-            r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#,
-        );
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0]["res"], "v1.players.identify.success");
-        assert_eq!(frames[0]["data"]["aliasId"].as_i64(), Some(42));
-        assert_eq!(frames[0]["data"]["playerId"].as_str(), Some("player-42"));
+        let mut c = conn(Some(42));
+        let (payloads, just_identified) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        assert!(just_identified);
+        assert!(c.identified);
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["res"], "v1.players.identify.success");
+        assert_eq!(payloads[0]["data"]["aliasId"].as_i64(), Some(42));
+        assert_eq!(payloads[0]["data"]["playerId"].as_str(), Some("player-42"));
+    }
+
+    #[test]
+    fn identify_error_paths_do_not_identify() {
+        let mut c = conn(Some(1));
+        let (payloads, just_identified) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":2}}"#);
+        assert!(!just_identified);
+        assert!(!c.identified);
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+
+        let mut c = conn(Some(1));
+        let (_, just_identified) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{}}"#);
+        assert!(!just_identified);
+        assert!(!c.identified);
+
+        let mut c = conn(None);
+        let (_, just_identified) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#);
+        assert!(!just_identified);
+        assert!(!c.identified);
     }
 
     #[test]
     fn identify_missing_alias_id_errors() {
-        let frames = process_text_frame(Some(42), r#"{"req":"v1.players.identify","data":{}}"#);
-        assert_eq!(frames[0]["res"], "v1.error");
-        assert_eq!(frames[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+        let payloads = frames(Some(42), r#"{"req":"v1.players.identify","data":{}}"#);
+        assert_eq!(payloads[0]["res"], "v1.error");
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
     fn identify_claiming_another_alias_errors() {
-        let frames = process_text_frame(
+        let payloads = frames(
             Some(1),
             r#"{"req":"v1.players.identify","data":{"playerAliasId":2}}"#,
         );
-        assert_eq!(frames[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
     fn identify_without_authenticated_ticket_errors() {
-        let frames = process_text_frame(
+        let payloads = frames(
             None,
             r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#,
         );
-        assert_eq!(frames[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+    }
+
+    #[test]
+    fn join_uses_resolved_ticket_alias_not_client_claim() {
+        // The client may only claim its ticketed alias; the presence join is
+        // keyed on the server-resolved alias id, never a body-supplied value.
+        let mut c = conn(Some(7));
+        let (payloads, just_identified) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":7}}"#);
+        assert!(just_identified);
+        assert_eq!(payloads[0]["res"], "v1.players.identify.success");
+
+        let leave = c.leave_presence().expect("identified conn must register");
+        assert_eq!(leave.alias_id, 7);
+        assert_eq!(leave.conn_key, c.conn_key);
+    }
+
+    #[test]
+    fn leave_presence_only_when_identified() {
+        assert!(conn(Some(42)).leave_presence().is_none());
+
+        let mut c = conn(Some(42));
+        let (_, just_identified) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        assert!(just_identified);
+        let leave = c.leave_presence().expect("identified conn must register");
+        assert_eq!(leave.alias_id, 42);
+        assert_eq!(leave.conn_key, c.conn_key);
     }
 
     #[test]
     fn channels_message_success() {
-        let frames = process_text_frame(
+        let payloads = frames(
             Some(3),
             r#"{"req":"v1.channels.message","data":{"channelId":7,"message":"hi"}}"#,
         );
-        assert_eq!(frames[0]["res"], "v1.channels.message");
-        assert_eq!(frames[0]["data"]["channel"]["id"].as_i64(), Some(7));
-        assert_eq!(frames[0]["data"]["message"]["message"].as_str(), Some("hi"));
+        assert_eq!(payloads[0]["res"], "v1.channels.message");
+        assert_eq!(payloads[0]["data"]["channel"]["id"].as_i64(), Some(7));
+        assert_eq!(
+            payloads[0]["data"]["message"]["message"].as_str(),
+            Some("hi")
+        );
     }
 
     #[test]
     fn channels_message_missing_channel_id_errors() {
-        let frames = process_text_frame(
+        let payloads = frames(
             Some(1),
             r#"{"req":"v1.channels.message","data":{"message":"hi"}}"#,
         );
-        assert_eq!(frames[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
     fn channels_message_missing_or_empty_message_errors() {
-        let frames = process_text_frame(
+        let payloads = frames(
             Some(1),
             r#"{"req":"v1.channels.message","data":{"channelId":1}}"#,
         );
-        assert_eq!(frames[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
-        let frames = process_text_frame(
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+        let payloads = frames(
             Some(1),
             r#"{"req":"v1.channels.message","data":{"channelId":1,"message":""}}"#,
         );
-        assert_eq!(frames[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
     fn message_ids_unique_within_same_second() {
-        let a = process_text_frame(
+        let a = frames(
             Some(1),
             r#"{"req":"v1.channels.message","data":{"channelId":1,"message":"hi"}}"#,
         );
-        let b = process_text_frame(
+        let b = frames(
             Some(1),
             r#"{"req":"v1.channels.message","data":{"channelId":1,"message":"hi"}}"#,
         );
@@ -248,16 +405,16 @@ mod tests {
 
     #[test]
     fn unknown_request_errors() {
-        let frames = process_text_frame(Some(1), r#"{"req":"v1.nope","data":{}}"#);
+        let payloads = frames(Some(1), r#"{"req":"v1.nope","data":{}}"#);
         assert_eq!(
-            frames[0]["data"]["code"].as_str(),
+            payloads[0]["data"]["code"].as_str(),
             Some("UNHANDLED_REQUEST")
         );
     }
 
     #[test]
     fn invalid_json_errors() {
-        let frames = process_text_frame(Some(1), "not-json");
-        assert_eq!(frames[0]["data"]["code"].as_str(), Some("INVALID_JSON"));
+        let payloads = frames(Some(1), "not-json");
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_JSON"));
     }
 }
