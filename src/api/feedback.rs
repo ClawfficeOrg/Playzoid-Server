@@ -60,7 +60,7 @@ fn error_body(msg: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, RateLimitConfig};
     use crate::services::auth as auth_svc;
     use actix_web::{App, http::StatusCode, test, web};
     use std::time::Duration;
@@ -75,6 +75,7 @@ mod tests {
             redis_url: "redis://test".into(),
             jwt_secret: SECRET.into(),
             jwt_expiry_secs: 3600,
+            rate_limit: RateLimitConfig::default(),
         }
     }
 
