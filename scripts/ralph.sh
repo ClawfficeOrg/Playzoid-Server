@@ -116,14 +116,14 @@ version_bump() {
 #            claude-code → claude, kilocode → kilo
 # ══════════════════════════════════════════════════════════════════════════
 
-TASK_PLANNING_AGENT="${TASK_PLANNING_AGENT:-opencode-go/deepseek-v4-flash}"
-BASIC_DEV_AGENT="${BASIC_DEV_AGENT:-opencode-go/deepseek-v4-flash}"
-MID_DEV_AGENT="${MID_DEV_AGENT:-opencode-go/deepseek-v4-flash}"
-PRO_DEV_AGENT="${PRO_DEV_AGENT:-github-copilot/claude-sonnet-4.6}"
-TASK_REVIEW_AGENT="${TASK_REVIEW_AGENT:-opencode-go/deepseek-v4-flash}"
-RELEASE_REVIEW_AGENT="${RELEASE_REVIEW_AGENT:-github-copilot/claude-sonnet-4.6}"
-MAJOR_RELEASE_REVIEW_AGENT="${MAJOR_RELEASE_REVIEW_AGENT:-github-copilot/claude-opus-4.8}"
-ARCHITECT_AGENT="${ARCHITECT_AGENT:-github-copilot/claude-sonnet-4.6}"
+TASK_PLANNING_AGENT="${TASK_PLANNING_AGENT:-opencode-go/ox-alpha-free}"
+BASIC_DEV_AGENT="${BASIC_DEV_AGENT:-opencode-go/ox-alpha-free}"
+MID_DEV_AGENT="${MID_DEV_AGENT:-opencode-go/ox-alpha-free}"
+PRO_DEV_AGENT="${PRO_DEV_AGENT:-opencode-go/ox-alpha-free}"
+TASK_REVIEW_AGENT="${TASK_REVIEW_AGENT:-opencode-go/ox-alpha-free}"
+RELEASE_REVIEW_AGENT="${RELEASE_REVIEW_AGENT:-opencode-go/ox-alpha-free}"
+MAJOR_RELEASE_REVIEW_AGENT="${MAJOR_RELEASE_REVIEW_AGENT:-opencode-go/ox-alpha-free}"
+ARCHITECT_AGENT="${ARCHITECT_AGENT:-opencode-go/ox-alpha-free}"
 
 # Caveman mode: prepend compressed-output instructions to every prompt.
 CAVEMAN="${CAVEMAN:-0}"
