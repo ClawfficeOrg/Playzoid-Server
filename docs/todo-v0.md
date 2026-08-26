@@ -122,9 +122,10 @@ connections.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
   <!-- 0.3.14 done note: implemented 2026-08-25 on task/0.3.14; ChannelHub rekeyed to channel → group(parent_account_id) → alias → conn_key, groups.rs resolves the parent server-side (best-effort, degraded to per-alias when pool absent/unknown alias) with pure group_key; join/leave/broadcast/prune/leave-all at group level (parent + subaccount share membership + chat; presence stays per-alias); additive parentAccountId in v1.players.identify.success; ws_index gains Option<web::Data<MySqlPool>> extractor; new hub + ws + groups unit tests, updated 100x1000x0-drop load tests, ws_integration no-pool upgrade guard; pending commit + PR + release/v0.3 merge -->
-- [ ] `0.3.15` Write WS load test (100 concurrent connections, message throughput).
+- [x] `0.3.15` Write WS load test (100 concurrent connections, message throughput).
   Complexity: High. Owned paths: `tests/` or `bench/`.
   Agent: pro_dev_agent
+  <!-- 0.3.15 done note: implemented 2026-08-25 on task/0.3.15; tests/ws_load.rs drives the in-process production ChannelHub fan-out path at the milestone spec — 100 live subscriber actors in one channel, 1000 chat messages broadcast (100k deliveries), exact-count assert proves 0 dropped/double-delivered envelopes; no network WS client crate is vendored so the hub is exercised via its public API, mirroring the unit load tests from src/sockets/channels.rs; pending commit + PR + release/v0.3 merge -->
 - [ ] `0.3.16` Write unit + integration tests for leaderboard and save endpoints.
   Complexity: Medium. Owned paths: `tests/`.
   Agent: mid_dev_agent
