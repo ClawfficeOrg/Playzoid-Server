@@ -177,3 +177,11 @@ DONE: task 0.3.14 — WebSocket subaccount participant support
 Gate checks (`fmt --check` / `clippy -D warnings` / `test`) pass. Commit/push/
 PR deferred by operator instruction — todo-v0.md flipped to `- [x]` with a
 done note pending PR.
+
+## 2026-08-25 22:38
+
+DONE: 0.3.14 merged into release/v0.3.
+
+## 2026-08-25 22:39
+
+Time limit reached. Completed: 9.
