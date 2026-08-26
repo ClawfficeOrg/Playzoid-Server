@@ -2,6 +2,13 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — analytics events schema (task 0.4.5)
+
+### Added
+- `migrations/20260826000002_create_analytics_events.up.sql` — `analytics_events` append-only event log: auto-increment internal id, nullable `player_id` FK to `players` with **ON DELETE SET NULL** (deleting a player must never erase their events — CASCADE would break append-only semantics), free-form `name VARCHAR(64)` event key, optional JSON `props` payload, `created_at`. No `updated_at` and no `public_id`: rows are never updated and clients never address a stored event (write-only ingest in v0). Schema stays deliberately generic (`name` + JSON) — typed event schema is an open question deferred to Phase 1.0; upstream Talo's event shape is undocumented in this repo so no upstream-specific columns were guessed. `props` size cap is enforced at the API layer (task 0.4.6); MySQL JSON columns cannot be size-bounded in schema. Indexes kept minimal for a high-write log: `(player_id)` and `(name, created_at)`.
+- `migrations/20260826000002_create_analytics_events.down.sql` — reversible drop.
+- `docs/todo-v1.md` — task 0.4.5 marked done with done-note.
+
 ## [Unreleased] — 2026-08-26 — per-game settings endpoints (task 0.4.4)
 
 ### Added

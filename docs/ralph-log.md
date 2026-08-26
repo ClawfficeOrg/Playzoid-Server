@@ -313,3 +313,26 @@ DONE (implementation; no commit/PR per session instructions):
   games/scopes land), todo-v1.md 0.4.4 marked done with note.
 - Gate: cargo fmt --check / clippy -D warnings / cargo test all green
   (178 unit passed; new integration tests ignored as designed).
+
+## 2026-08-26 06:53
+
+DONE: 0.4.4 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.5 (analytics_events migration)
+
+DONE (implementation; no commit/PR per session instructions):
+- `migrations/20260826000002_create_analytics_events.{up,down}.sql` (new):
+  append-only event log. No `updated_at` / no `public_id` (rows never
+  updated, clients never address stored events). `player_id` nullable FK
+  ON DELETE SET NULL — player deletion must not erase event history
+  (CASCADE would break append-only semantics). Generic `name VARCHAR(64)`
+  + JSON `props`: upstream Talo event shape undocumented in repo (grep:
+  zero matches in TALO_API*.md), typed schema deferred to Phase 1.0 per
+  memory.md Open Question #6 — no columns guessed.
+- Indexes minimal for high-write log: `(player_id)`,
+  `(name, created_at)`. Props size cap deferred to API layer (0.4.6),
+  same split as leaderboards ≤ 4 KB rule.
+- Docs: CHANGES.md entry, memory.md decision entry, todo-v1.md 0.4.5
+  marked done with note.
+- Scope discipline: did NOT pre-create src/entities/analytics_event.rs
+  (0.4.6's owned path) despite it being the natural next want.
