@@ -64,6 +64,7 @@ async fn main() -> std::io::Result<()> {
             .configure(api::players::config)
             .configure(api::leaderboards::config)
             .configure(api::saves::config)
+            .configure(api::game_settings::config)
             .configure(api::socket_ticket::config)
             .route("/ws", web::get().to(sockets::ws::ws_index));
         if let Some(p) = pool.clone() {
