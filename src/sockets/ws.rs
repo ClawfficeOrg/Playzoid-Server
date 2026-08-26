@@ -2,6 +2,7 @@ use actix::prelude::*;
 use actix_web::{Error, HttpRequest, HttpResponse, web};
 use actix_web_actors::ws;
 use serde_json::{Value, json};
+use sqlx::MySqlPool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::instrument;
 
@@ -9,6 +10,7 @@ use crate::sockets::channels::{
     self, ChannelMessage, ChannelNotification, JoinChannel, LeaveAllChannels, LeaveChannel,
     MAX_CHAT_MESSAGE_CHARS,
 };
+use crate::sockets::groups;
 use crate::sockets::presence::{self, JoinPresence, LeavePresence};
 
 /// Monotonic counter giving each connection a unique presence key.
@@ -24,8 +26,12 @@ enum FrameOutcome {
     None,
     /// The frame completed a successful identify; arm a presence join.
     Identify,
-    /// The frame requested a channel join for the given channel.
-    JoinChannel { channel_id: i64 },
+    /// The frame requested a channel join for the given channel; the resolved
+    /// `parent_account_id` derives the participant group the hub registers.
+    JoinChannel {
+        channel_id: i64,
+        parent_account_id: Option<i64>,
+    },
     /// The frame requested a channel leave for the given channel.
     LeaveChannel { channel_id: i64 },
     /// The frame requested a chat message for the given channel; broadcast it.
@@ -36,6 +42,10 @@ enum FrameOutcome {
 pub struct WsConn {
     /// Authenticated player alias id resolved from the socket ticket on connect.
     pub alias_id: Option<i64>,
+    /// Server-resolved `players.parent_account_id` for the ticketed alias
+    /// (`None` for a root account, an unresolvable alias, or when the DB pool
+    /// is unavailable). Derives the channel-participation group key.
+    pub parent_account_id: Option<i64>,
     /// Unique id for this connection, used to unregister presence on drop.
     conn_key: usize,
     /// True once the client has successfully identified as the ticketed alias.
@@ -88,6 +98,7 @@ impl WsConn {
                         "data": {
                             "aliasId": id,
                             "playerId": format!("player-{}", id),
+                            "parentAccountId": self.parent_account_id,
                         }
                     }),
                     FrameOutcome::Identify,
@@ -114,7 +125,13 @@ impl WsConn {
                 FrameOutcome::None,
             );
         };
-        (Vec::new(), FrameOutcome::JoinChannel { channel_id })
+        (
+            Vec::new(),
+            FrameOutcome::JoinChannel {
+                channel_id,
+                parent_account_id: self.parent_account_id,
+            },
+        )
     }
 
     /// Handle a `v1.channels.leave` request; symmetric to
@@ -191,6 +208,10 @@ impl WsConn {
             FrameOutcome::BroadcastMessage(ChannelMessage {
                 channel_id,
                 alias_id,
+                // The sender's participant group is stamped here, server-side,
+                // from the ticketed alias and its resolved parent — never from
+                // a client-supplied value. The hub gates the fan-out on it.
+                group: groups::group_key(alias_id, self.parent_account_id),
                 message: message.to_string(),
             }),
         )
@@ -251,7 +272,7 @@ impl Actor for WsConn {
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         if let Some(LeavePresence { alias_id, conn_key }) = self.leave_presence() {
             presence::hub().do_send(LeavePresence { alias_id, conn_key });
-            channels::hub().do_send(LeaveAllChannels { alias_id, conn_key });
+            channels::hub().do_send(LeaveAllChannels { conn_key });
         }
         Running::Stop
     }
@@ -326,15 +347,20 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                             });
                         }
                     }
-                    FrameOutcome::JoinChannel { channel_id } => {
+                    FrameOutcome::JoinChannel {
+                        channel_id,
+                        parent_account_id,
+                    } => {
                         // Register channel membership with the ticketed alias
                         // and this connection's own address as recipient, so it
                         // receives both membership-change and chat-message
-                        // notifications for the channel.
+                        // notifications for the channel. The hub derives the
+                        // participant group from the resolved parent id.
                         if let Some(alias_id) = self.alias_id {
                             channels::hub().do_send(JoinChannel {
                                 channel_id,
                                 alias_id,
+                                parent_account_id,
                                 conn_key: self.conn_key,
                                 recipient: ctx.address().recipient::<ChannelNotification>(),
                             });
@@ -345,6 +371,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                             channels::hub().do_send(LeaveChannel {
                                 channel_id,
                                 alias_id,
+                                parent_account_id: self.parent_account_id,
                                 conn_key: self.conn_key,
                             });
                         }
@@ -381,7 +408,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
 /// receive the `INVALID_SOCKET_TOKEN` error envelope, then the connection is
 /// closed by [`WsConn::started`].
 #[instrument(skip_all)]
-pub async fn ws_index(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
+pub async fn ws_index(
+    r: HttpRequest,
+    stream: web::Payload,
+    pool: Option<web::Data<MySqlPool>>,
+) -> Result<HttpResponse, Error> {
     // Extract ticket from query param: ?ticket=...
     let ticket_opt = url::form_urlencoded::parse(r.query_string().as_bytes())
         .find(|(k, _)| k == "ticket")
@@ -389,9 +420,30 @@ pub async fn ws_index(r: HttpRequest, stream: web::Payload) -> Result<HttpRespon
     let alias_id = ticket_opt
         .as_deref()
         .and_then(crate::sockets::tickets::verify_ticket);
+    // Resolve the subaccount parent for the ticketed alias so channel
+    // participation can be grouped. Best-effort: a missing pool, an unknown
+    // alias, or a failed lookup degrades to `None` (the alias groups as
+    // itself) without ever failing the connection.
+    let parent_account_id = match pool.as_ref().zip(alias_id) {
+        Some((pool, alias_id)) => {
+            match groups::resolve_parent_account_id(pool.get_ref(), alias_id).await {
+                Ok(row) => row.flatten(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        alias_id,
+                        "subaccount group lookup failed; treating alias as its own group"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
     ws::start(
         WsConn {
             alias_id,
+            parent_account_id,
             conn_key: 0,
             identified: false,
         },
@@ -408,6 +460,17 @@ mod tests {
     fn conn(alias_id: Option<i64>) -> WsConn {
         WsConn {
             alias_id,
+            parent_account_id: None,
+            conn_key: 7,
+            identified: false,
+        }
+    }
+
+    /// Build a conn whose resolved parent is set (subaccount simulation).
+    fn conn_with_parent(alias_id: i64, parent_account_id: Option<i64>) -> WsConn {
+        WsConn {
+            alias_id: Some(alias_id),
+            parent_account_id,
             conn_key: 7,
             identified: false,
         }
@@ -429,6 +492,21 @@ mod tests {
         assert_eq!(payloads[0]["res"], "v1.players.identify.success");
         assert_eq!(payloads[0]["data"]["aliasId"].as_i64(), Some(42));
         assert_eq!(payloads[0]["data"]["playerId"].as_str(), Some("player-42"));
+        assert!(
+            payloads[0]["data"]["parentAccountId"].is_null(),
+            "root conns surface a null parentAccountId"
+        );
+    }
+
+    #[test]
+    fn identify_success_surfaces_resolved_parent() {
+        // A subaccount conn carries its server-resolved parent into the
+        // additive `parentAccountId` field of the identify.success data.
+        let mut c = conn_with_parent(42, Some(7));
+        let (payloads, outcome) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        assert!(matches!(outcome, FrameOutcome::Identify));
+        assert_eq!(payloads[0]["data"]["parentAccountId"].as_i64(), Some(7));
     }
 
     #[test]
@@ -528,6 +606,50 @@ mod tests {
                     message.alias_id, 42,
                     "sender alias must be the ticketed alias, never the spoofed body claim"
                 );
+                assert_eq!(
+                    message.group, 42,
+                    "a root conn's message must be stamped with the alias as its own group"
+                );
+            }
+            _ => panic!("expected BroadcastMessage outcome"),
+        }
+    }
+
+    #[test]
+    fn channels_message_stamps_group_for_subaccount() {
+        // A subaccount conn (alias 42, parent 5) stamps its message with the
+        // parent-derived group (5); a root conn stamps the alias as the group.
+        let mut c = conn_with_parent(42, Some(5));
+        let (_, outcome) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        assert!(matches!(outcome, FrameOutcome::Identify));
+        let (payloads, outcome) = c.process_text_frame(
+            r#"{"req":"v1.channels.message","data":{"channelId":7,"message":"hi","playerAliasId":999}}"#,
+        );
+        assert!(
+            payloads.is_empty(),
+            "a message send must produce no local echo; the hub broadcasts it"
+        );
+        match outcome {
+            FrameOutcome::BroadcastMessage(message) => {
+                assert_eq!(
+                    message.group, 5,
+                    "group must derive from the resolved parent"
+                );
+                assert_eq!(message.alias_id, 42);
+            }
+            _ => panic!("expected BroadcastMessage outcome"),
+        }
+
+        // Root conn: same alias shape but no parent -> group is the alias.
+        let mut c = conn(Some(42));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        let (_, outcome) = c.process_text_frame(
+            r#"{"req":"v1.channels.message","data":{"channelId":7,"message":"hi"}}"#,
+        );
+        match outcome {
+            FrameOutcome::BroadcastMessage(message) => {
+                assert_eq!(message.group, 42, "root conns group as their own alias");
             }
             _ => panic!("expected BroadcastMessage outcome"),
         }
@@ -611,7 +733,38 @@ mod tests {
         );
         assert!(matches!(
             outcome,
-            FrameOutcome::JoinChannel { channel_id: 7 }
+            FrameOutcome::JoinChannel {
+                channel_id: 7,
+                parent_account_id: None
+            }
+        ));
+    }
+
+    #[test]
+    fn join_surfaces_resolved_parent_for_grouping() {
+        // A subaccount conn's join outcome carries its resolved parent so the
+        // hub can derive the participant group (root conns pass None).
+        let mut c = conn_with_parent(42, Some(5));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        let (_, outcome) =
+            c.process_text_frame(r#"{"req":"v1.channels.join","data":{"channelId":7}}"#);
+        assert!(matches!(
+            outcome,
+            FrameOutcome::JoinChannel {
+                channel_id: 7,
+                parent_account_id: Some(5)
+            }
+        ));
+        let mut root = conn(Some(42));
+        root.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        let (_, root_outcome) =
+            root.process_text_frame(r#"{"req":"v1.channels.join","data":{"channelId":7}}"#);
+        assert!(matches!(
+            root_outcome,
+            FrameOutcome::JoinChannel {
+                channel_id: 7,
+                parent_account_id: None
+            }
         ));
     }
 
