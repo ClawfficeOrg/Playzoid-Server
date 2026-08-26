@@ -104,6 +104,46 @@ pub async fn get_save(
     Ok(SaveView::from((row, player_public_id.to_owned())))
 }
 
+/// Delete a single save owned by `player_public_id` and addressable by
+/// `save_public_id`.
+///
+/// The player is resolved to its internal id first and must not be
+/// soft-deleted — a missing or deleted player maps to
+/// [`SaveServiceError::NotFound`]. The `DELETE` is then scoped by that
+/// internal player id plus the `public_id`, mirroring the 0.3.8 read: an
+/// unknown `save_public_id` — or one that belongs to a different player —
+/// affects zero rows and also maps to [`SaveServiceError::NotFound`]
+/// (cross-player deletes never leak, they 404).
+pub async fn delete_save(
+    pool: &MySqlPool,
+    player_public_id: &str,
+    save_public_id: &str,
+) -> Result<(), SaveServiceError> {
+    let player_id: Option<(u64,)> =
+        sqlx::query_as("SELECT id FROM players WHERE public_id = ? AND status <> 'deleted'")
+            .bind(player_public_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(SaveServiceError::Database)?;
+
+    let Some((player_id,)) = player_id else {
+        return Err(SaveServiceError::NotFound);
+    };
+
+    let result = sqlx::query("DELETE FROM game_saves WHERE public_id = ? AND player_id = ?")
+        .bind(save_public_id)
+        .bind(player_id)
+        .execute(pool)
+        .await
+        .map_err(SaveServiceError::Database)?;
+
+    if result.rows_affected() == 0 {
+        return Err(SaveServiceError::NotFound);
+    }
+
+    Ok(())
+}
+
 /// Maximum combined serialized size (bytes) accepted for `save` + `metadata`.
 ///
 /// 32 KiB keeps rows comfortably under InnoDB's 65,535-byte row-size limit
