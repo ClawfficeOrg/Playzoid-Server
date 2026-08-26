@@ -107,9 +107,10 @@ connections.
 - [x] `0.3.10` Implement WebSocket `/ws` handler with actix-web WS upgrade.
   Complexity: High. Owned paths: `src/sockets/ws.rs`.
   Agent: pro_dev_agent
-- [ ] `0.3.11` WebSocket: player connect/disconnect presence broadcast.
+- [x] `0.3.11` WebSocket: player connect/disconnect presence broadcast.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
+  <!-- 0.3.11 done note: implemented 2026-08-25 on task/0.3.11; in-memory PresenceHub (src/sockets/presence.rs) broadcasts Talo v1.players.presence.updated on first-identify online / last-disconnect offline; register-on-identify (Talo timing), alias from ticket only (no spoofing); process-global Lazy hub, no main.rs changes; pending PR + release/v0.3 merge -->
 - [ ] `0.3.12` WebSocket: channel join/leave message types.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent

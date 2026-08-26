@@ -1,5 +1,6 @@
 //! WebSocket scaffold
 
+pub mod presence;
 pub mod tickets;
 pub mod ws;
 
