@@ -56,3 +56,20 @@ or an unknown save id → 404 (never leaks). Gate checks
 (`fmt --check` / `clippy -D warnings` / `test`) all pass. Commit/push/PR
 deferred by operator instruction — todo-v0.md flipped to `- [x]` with a
 done note pending PR.
+
+## 2026-08-25 21:18
+
+DONE: 0.3.8 merged into release/v0.3.
+
+## 2026-08-25
+
+DONE: task 0.3.9 — implemented `DELETE /saves/{player_id}/{save_id}` (delete save).
+Service `delete_save` (`src/services/saves.rs`), handler + route
+(`src/api/saves.rs`), 3 API-layer unit tests, 6 `#[ignore]`d integration
+tests in `tests/saves_integration.rs` (Docker dev stack). Own-only:
+cross-player 403 before SQL; player-scoped DELETE (`WHERE public_id = ? AND
+player_id = ?`) so another player's save or an unknown save id → 404 (0 rows,
+never leaks). Success → 204 No Content. Gate checks
+(`fmt --check` / `clippy -D warnings` / `test`) all pass. Commit/push/PR
+deferred by operator instruction — todo-v0.md flipped to `- [x]` with a
+done note pending PR.

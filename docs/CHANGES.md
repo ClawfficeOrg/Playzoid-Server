@@ -2,6 +2,16 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — Delete a single game save (task 0.3.9)
+
+### Added
+- `DELETE /saves/{player_id}/{save_id}` — auth-gated deletion of one save. `{player_id}` must match the JWT identity (403 before any SQL); the `DELETE` is scoped to the owning player's internal id, so an unknown `{save_id}` — or one owned by a different player — affects zero rows and returns 404 (cross-player deletes never leak). Unknown or soft-deleted players → 404. Returns 204 No Content on success.
+- `src/services/saves.rs` — added `delete_save` (player-active guard + player-scoped parameterized delete, `rows_affected == 0` → `NotFound`).
+- `src/api/saves.rs` — `delete_save` handler wiring `DELETE /saves/{player_id}/{save_id}` into the existing `/saves` scope; 3 new API-layer unit tests (401, cross-player 403, pool-unavailable 503).
+- `tests/saves_integration.rs` — 6 new integration tests against the Docker dev stack (auth required 401, delete + verify via GET + siblings unaffected 204, cross-player 403, unknown save 404, other player's save 404, soft-deleted player 404).
+
+---
+
 ## [Unreleased] — 2026-08-25 — Retrieve a single game save (task 0.3.8)
 
 ### Added

@@ -7,6 +7,7 @@
 //!                                           profile reads these endpoints only ever
 //!                                           touch the caller's own saves.
 //! `GET  /saves/{player_id}/{save_id}`     — retrieve a single save (auth required).
+//! `DELETE /saves/{player_id}/{save_id}`    — delete a single save (auth required).
 
 use crate::middleware::auth::AuthenticatedUser;
 use crate::services::saves::{self as saves_svc, SaveServiceError};
@@ -21,7 +22,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("/saves")
             .route("", web::post().to(create_save))
             .route("/{player_id}", web::get().to(list_saves))
-            .route("/{player_id}/{save_id}", web::get().to(get_save)),
+            .route("/{player_id}/{save_id}", web::get().to(get_save))
+            .route("/{player_id}/{save_id}", web::delete().to(delete_save)),
     );
 }
 
@@ -166,6 +168,42 @@ async fn get_save(
 
 fn error_body(msg: &str) -> serde_json::Value {
     serde_json::json!({ "error": msg })
+}
+
+/// Delete a single save owned by the authenticated player.
+///
+/// The `{player_id}` path segment must match the JWT identity — cross-player
+/// requests return 403 before any database work. The `{save_id}` is deleted
+/// scoped to the owning player's internal id, so an unknown save id — or one
+/// owned by a different player — returns 404 (never leaks). Unknown or
+/// soft-deleted players return 404. Returns 204 No Content on success.
+#[tracing::instrument(skip(pool, user))]
+async fn delete_save(
+    path: web::Path<(String, String)>,
+    pool: Option<web::Data<MySqlPool>>,
+    user: AuthenticatedUser,
+) -> HttpResponse {
+    let (player_id, save_id) = path.into_inner();
+
+    // Ownership check before the pool check so cross-player requests fail fast.
+    if player_id != user.player_public_id {
+        return HttpResponse::Forbidden().json(error_body("you may only delete your own saves"));
+    }
+
+    let Some(pool) = pool else {
+        return HttpResponse::ServiceUnavailable().json(error_body("database unavailable"));
+    };
+
+    match saves_svc::delete_save(pool.get_ref(), &player_id, &save_id).await {
+        Ok(()) => HttpResponse::NoContent().finish(),
+        Err(SaveServiceError::NotFound) => {
+            HttpResponse::NotFound().json(error_body("player or save not found"))
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "delete_save failed");
+            HttpResponse::InternalServerError().json(error_body("internal error"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -446,6 +484,58 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
+            .uri("/saves/player-uuid-1/save-uuid-1")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── DELETE /saves/{player_id}/{save_id} ────────────────────────────────
+
+    #[actix_web::test]
+    async fn delete_save_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::delete()
+            .uri("/saves/player-uuid-1/save-uuid-1")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn delete_save_cross_player_returns_403() {
+        // Ownership check runs before the pool check — no pool is registered.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::delete()
+            .uri("/saves/player-uuid-2/save-uuid-1")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn delete_save_without_pool_returns_503() {
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::delete()
             .uri("/saves/player-uuid-1/save-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
