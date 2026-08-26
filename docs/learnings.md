@@ -4,6 +4,23 @@ Per-task learnings: what worked, what bit, what to do differently.
 One `## X.Y.Z — Title` section per task, newest first. Keep entries short —
 bullets over prose. Read the last few sections before starting a similar task.
 
+## 0.3.11 — WS presence broadcast
+
+- actix `Recipient` mailboxes give no ack — test hub broadcasts by polling an
+  `Arc<Mutex<Vec>>` that a mock actor's `Handler` appends to, with a deadline
+  loop. Hub `send().await` only orders the *hub's own* handler, not the
+  spawned recipients.
+- Spawn process-global actors from inside the WS request context via
+  `once_cell::Lazy<Addr<…>>::new(|| Actor::new().start())` — the arbiter that
+  first touches the `Lazy` lives for the system lifetime, so no `main.rs`
+  wiring is needed for a single-process hub.
+- Keep side effects out of the actor plumbing: `process_text_frame(&mut self)
+  -> (Vec<Value>, bool)` + `leave_presence() -> Option<…>` mean the
+  join/leave decisions are unit-testable without a live websocket.
+- A second connection to an already-online alias is **not** a transition — no
+  broadcast fires, not even to the new socket. Test that, don't assert a dup
+  online event.
+
 ## 0.3.4 — PUT leaderboard entry
 
 - MySQL returns `COUNT(*)` as signed BIGINT — decode into `i64`, not `u64`,
@@ -37,5 +54,3 @@ bullets over prose. Read the last few sections before starting a similar task.
   `cargo test --test '*' -- --ignored` while compose is up.
 - Unique usernames (`u<uuid12>`) prevent cross-run collisions on the shared
   dev database.
-
-<!-- Append new learnings above this line, newest first. -->
