@@ -336,3 +336,7 @@ DONE (implementation; no commit/PR per session instructions):
   marked done with note.
 - Scope discipline: did NOT pre-create src/entities/analytics_event.rs
   (0.4.6's owned path) despite it being the natural next want.
+
+## 2026-08-26 07:02
+
+DONE: 0.4.5 merged into release/v0.4.

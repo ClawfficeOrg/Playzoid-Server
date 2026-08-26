@@ -532,6 +532,53 @@ schema as deferred to Phase 1.0.
 
 ---
 
+## 2026-08-26 — `POST /v1/events`: bare-array fire-and-forget ingest, anonymous-on-miss attribution (task 0.4.6)
+
+**Context:** task 0.4.6 implements the batched analytics ingest over the
+generic `analytics_events` schema from 0.4.5. Upstream Talo's event shape
+remains undocumented in this repo (no events section in `TALO_API.md`, no
+Event struct in `TALO_API_STRUCTS.md`), so the 0.4.5 schema plus this task's
+text ("batched array body, validate shape, fire-and-forget semantics") are
+authoritative.
+
+**Decisions:**
+- **Body = bare JSON array** `[{"name", "props"?}, ...]` — no wrapper
+  object, no client timestamps (`created_at` is DB-stamped; append-only
+  log), and `deny_unknown_fields` per event so malformed telemetry surfaces
+  as a clean 400 instead of silently dropping data.
+- **Whole-batch atomic validation pre-SQL** (`validate_batch` pure fn):
+  non-empty, ≤ `MAX_BATCH_EVENTS` = 100, trimmed `name` 1..=64 chars
+  (`VARCHAR(64)`), serialized `props` ≤ `MAX_PROPS_BYTES` = 4 KiB
+  (leaderboard props precedent). One invalid event rejects everything with
+  400; nothing partial is ever written.
+- **Fire-and-forget HTTP contract:** accepted batches answer
+  `202 {"accepted": n}` after one batched multi-row INSERT; *any*
+  post-validation database failure is logged (`tracing::error!` with batch
+  size) and **still answered 202** — analytics loss is tolerable by
+  definition and clients never block on DB health. Pool absent → 503
+  (degraded-mode precedent). Rejected: 500 on DB failure (contradicts the
+  contract); `tokio::spawn` writes (kills test determinism + backpressure).
+- **Best-effort attribution:** JWT `public_id` resolves to the internal
+  `players.id` once per request (`status <> 'deleted'`, saves precedent);
+  an unknown/deleted caller — or even a failing resolution query — stores
+  anonymous rows (`player_id NULL`) instead of failing. Deliberately unlike
+  saves' 404: events address no player resource.
+- **Batched INSERT via `sqlx::QueryBuilder::push_values`:** only `(?, ?, ?)`
+  placeholder scaffolding repeated by the validated count, every value
+  attached through `push_bind` — identical injection guarantee to the
+  static bound queries elsewhere; 100×3 params ≪ MySQL's parameter limit.
+  Explicit SQL-safety comment in code so reviewers don't misread it as
+  interpolation.
+- Caps bound abuse until rate limiting (0.4.8): worst case ~400 KiB/request.
+
+**Consequences:**
+- Swallowed DB errors create an observability gap until `/metrics` (0.4.9);
+  errors are logged with batch size meanwhile.
+- Typed event schema stays deferred to Phase 1.0 (Open Question #6); when it
+  lands only `EventInput`/`validate_batch` change.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
