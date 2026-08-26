@@ -2,6 +2,20 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — per-game settings endpoints (task 0.4.4)
+
+### Added
+- `GET /v1/games/{game_id}/settings` — auth-gated read of one game's stored JSON config; unknown game → 404. No legacy alias mount (route created after the 0.4.1 prefix-parity pass; `/v1/socket-tickets` precedent).
+- `PUT /v1/games/{game_id}/settings` — auth-gated create-or-replace of one game's config via a parameterized upsert keyed on the unique `game_id` route identifier (`created_at` preserved; MySQL maintains `updated_at`). Returns the stored view (200) either way.
+- `src/entities/game_setting.rs` — `GameSettingView` (camelCase `gameId`/`config`/`createdAt`/`updatedAt`) + internal `GameSettingRow` (`FromRow`; internal BIGINT id never selected/exposed).
+- `src/services/game_settings.rs` — `get_settings`/`put_settings`, pre-SQL validation (trimmed `game_id` 1..=64 chars matching `VARCHAR(64)`; config not JSON-null; serialized size ≤ `MAX_CONFIG_BYTES` = 32 KiB, mirroring the saves cap), and `GameSettingsServiceError` (`NotFound`/`Invalid`/`Database`).
+- `src/api/game_settings.rs` — handlers + single canonical `/v1/games` scope; body wrapper `{ "config": <any> }` rejects unknown top-level fields while keeping the inner config arbitrary JSON. Error mapping: invalid → 400, unknown → 404, pool absent → 503.
+- Unit tests (entity/service/API same-file) + `tests/game_settings_integration.rs` (10 `#[ignore]`d live-stack tests incl. the milestone round-trip, upsert-preserves-`created_at`, and the 64-char `VARCHAR(64)` boundary checks).
+- Wired into `src/{api,services,entities}/mod.rs` and `src/main.rs`.
+
+### Security note
+- PUT is authenticated-only with no ownership/admin scoping yet (no `games` table exists); any valid JWT may write any game's config — v0 trade-off recorded in `docs/memory.md`, revisit when games/scopes land.
+
 ## [Unreleased] — 2026-08-26 — game settings schema (task 0.4.3)
 
 ### Added

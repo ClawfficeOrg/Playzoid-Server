@@ -473,6 +473,37 @@ MySQL JSON columns cannot be size-bounded — and belongs to the API layer
 
 ---
 
+## 2026-08-26 — Game settings endpoints: Playzoid extension, JWT-only writes, 32 KiB cap, upsert (task 0.4.4)
+
+**Context:** task 0.4.4 adds `GET/PUT /v1/games/{game_id}/settings`. Upstream
+Talo has only dashboard-managed global `GET /v1/game-config` KV — verified no
+upstream per-game settings HTTP endpoint exists, so the task text plus the
+0.4.3 schema decision are authoritative for the shape.
+
+**Decisions:**
+- **Documented Playzoid extension**, not upstream parity: request/response
+  shape defined by this repo (`{ gameId, config, createdAt, updatedAt }`,
+  camelCase like every other view). Recorded here so 0.4.13's TALO_API.md
+  update marks it as an extension rather than upstream surface.
+- **PUT upserts** (`INSERT … ON DUPLICATE KEY UPDATE config = ?`, fully
+  parameterized, value bound twice): first PUT creates, later PUTs replace
+  only `config`; `created_at` preserved, `updated_at` maintained by MySQL.
+  Always returns 200 with the read-back view — no create/update status split,
+  because clients address the row by id, not by server-assigned key.
+- **Size cap 32 KiB** (`MAX_CONFIG_BYTES`), mirroring the saves
+  `MAX_SAVE_BYTES` precedent; enforced pre-SQL alongside null-config and
+  id-length validation so bad requests never touch the database.
+- **No legacy alias mount**: the route is born after the 0.4.1 parity pass;
+  only `/v1/games/{game_id}/settings` exists (`/v1/socket-tickets`
+  precedent).
+- **Auth trade-off:** both endpoints require a valid JWT, but there is no
+  `games` table / ownership / admin scope yet, so any authenticated player
+  can overwrite any game's config. v0 accepts this per the task spec
+  ("auth-guarded"); revisit when `games` or scopes land. Rate limiting
+  arrives in 0.4.8.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

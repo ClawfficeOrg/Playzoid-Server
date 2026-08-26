@@ -1,6 +1,7 @@
 //! HTTP API handlers (scaffold)
 
 pub mod auth;
+pub mod game_settings;
 pub mod healthz;
 pub mod leaderboards;
 pub mod players;
