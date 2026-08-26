@@ -1,0 +1,11 @@
+# Local dev-stack overrides — NOT committed defaults.
+#
+# Use when another service already occupies host port 6379:
+#   docker compose -f config/docker-compose.dev.yml \
+#                  -f config/docker-compose.dev.override.yml up -d
+# Then point integration tests at the alternate port:
+#   export REDIS_URL=redis://127.0.0.1:6380
+services:
+  redis:
+    ports: !override
+      - "127.0.0.1:6380:6379"
