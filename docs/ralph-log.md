@@ -199,3 +199,7 @@ justification in commit). fmt/clippy/test green; full ignored integration
 suite run vs Docker stack: 26/26 leaderboards, 29/29 saves.
 
 Pending: commit + PR (Closes task 0.3.16) + release/v0.3 merge.
+
+## 2026-08-25 23:15
+
+DONE: 0.3.16 merged into release/v0.3.
