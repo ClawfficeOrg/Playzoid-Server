@@ -185,3 +185,17 @@ DONE: 0.3.14 merged into release/v0.3.
 ## 2026-08-25 22:39
 
 Time limit reached. Completed: 9.
+
+## 2026-08-25 23:07
+
+DONE: 0.3.15 merged into release/v0.3.
+
+## 2026-08-25 23:15
+
+DONE: 0.3.16 — leaderboard + save unit/integration test gap-fill. 10 new
+tests/leaderboards_integration.rs, 5 new tests/saves_integration.rs,
+entity unit tests in src/entities/leaderboard.rs (mirrors save.rs — owned-path
+justification in commit). fmt/clippy/test green; full ignored integration
+suite run vs Docker stack: 26/26 leaderboards, 29/29 saves.
+
+Pending: commit + PR (Closes task 0.3.16) + release/v0.3 merge.
