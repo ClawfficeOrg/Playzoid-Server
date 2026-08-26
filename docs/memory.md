@@ -311,6 +311,65 @@ non-member, or into an unknown/empty channel, is a silent no-op for v0.
 
 ---
 
+## 2026-08-25 — Socket channel participation is group-keyed by parent_account_id (task 0.3.14)
+
+**Context:** Task 0.3.14 adds subaccount participant support to WebSocket game
+channels. `TaloRustServerPlan.md` docifies a "Subaccount Chat Extension" where
+subaccounts appear as distinct users but share channel membership with their
+parent. The verified upstream envelope set (`v1.channels.*`,
+`v1.players.presence.updated`) carries per-alias `playerAlias` ids and never a
+parent relationship, so the grouping must live server-side.
+
+**Options considered:**
+- Group-keyed participation at the registry level (chosen): a channel's
+  participant set is its distinct groups with ≥1 live conn, where
+  `group(alias) = players.parent_account_id` (server-resolved) or the alias
+  itself for root accounts. First conn of a group announces `player-joined`
+  (carrying the joining alias); last conn announces `player-left` (carrying the
+  departing alias); chat fans to every conn across the channel's participant
+  groups. Parent and subaccount conns therefore share membership and each
+  other's chat.
+- Parent id as an envelope field on broadcasts — breaks Talo parity; rejected
+  (parity doctrine from 0.3.12/0.3.13). An **optional, additive**
+  `parentAccountId` is instead surfaced in the `v1.players.identify.success`
+  data (null for roots / degraded DB).
+- Per-alias membership with parent-implied reads — requires walking parent
+  trees per broadcast; no in-scope trigger and more state.
+
+**Decision:** The single-process `ChannelHub` registry is rekeyed to
+`channel → group → alias → conn_key → Recipient<ChannelNotification>` with a
+reverse `conn_key → (channel, group, alias)` index (the alias is kept so a
+group's last-conn `player-left` announces the departing alias). The group is
+always derived server-side from the ticketed alias via a parameterized
+`SELECT parent_account_id FROM players WHERE id = ? AND status <> 'deleted'`;
+`resolve_parent_account_id` + pure `group_key` live in the new
+`src/sockets/groups.rs`. Immediate parent only (one hop, mirrors the one-level
+parent resolution used elsewhere); nested-subaccount roots are follow-up.
+Envelopes keep the Talo-verified per-alias shape — grouping is visible only in
+who shares a channel's membership. `v1.channels.join` / `leave` /
+`message` remain Playzoid request extensions (0.3.12/0.3.13). Presence stays
+per-alias, so subaccounts still appear as distinct users there.
+**Degraded mode:** when the DB pool is absent, the alias is unknown, or the
+lookup fails, `parent_account_id = None` and every alias groups as itself —
+today's behavior; group resolution never fails a connection.
+
+**Consequences:**
+- `JoinChannel`/`LeaveChannel` carry the resolved `parent_account_id`; the hub
+  computes the group key. `ChannelMessage` carries the sender's server-stamped
+  `group`; the send gate is group-level membership (`group` must be a channel
+  participant), so a subaccount of a participant parent may send.
+- Spoof-proofing preserved: group always derives from the ticketed alias →
+  `players.id`, never a client-supplied value (additive `parentAccountId` in
+  `identify.success` is server data, not client input).
+- A pre-existing v0 gap noted, not fixed (outside `src/sockets/` owned path):
+  `POST /v1/socket-tickets` accepts any client-supplied alias id. A lookup miss
+  just disables grouping for that alias — no privilege path, because the group
+  remains server-derived.
+- Single-node only, same as presence/chat; multi-instance needs a shared store
+  (tracked with the multi-node work).
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

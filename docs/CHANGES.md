@@ -2,6 +2,22 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — WebSocket subaccount participant support (task 0.3.14)
+
+### Changed
+- `src/sockets/channels.rs` — the channel hub's membership registry is rekeyed to **participant groups**: `channel → group → alias → conn_key → Recipient`, with the reverse index widened to `conn_key → (channel, group, alias)`. A channel's participants are its distinct groups (server-resolved `parent_account_id`, or the alias itself for roots), so the first connection of a group announces `v1.channels.player-joined` (carrying the joining alias), the last connection announces `v1.channels.player-left` (carrying the departing alias), and chat fans out to every connection across the channel's participant groups — a subaccount and its parent share membership and each other's chat. `JoinChannel`/`LeaveChannel` carry the alias's resolved `parent_account_id` (the hub derives the group); `ChannelMessage` carries a server-stamped `group` and the send gate is group-level membership. `LeaveAllChannels` now keys on `conn_key` only (the reverse index already knows each membership's channel/group/alias). Envelopes stay Talo-verified and per-alias — grouping is visible only in membership sharing.
+- `src/sockets/ws.rs` — `WsConn` gains the server-resolved `parent_account_id` and `ws_index` gains an `Option<web::Data<MySqlPool>>` extractor that resolves it best-effort on connect (missing pool / unknown alias / lookup error degrade to `None`, never failing the connection). `FrameOutcome::JoinChannel` carries the parent; the message handler stamps the sender's group from the ticketed alias + resolved parent (spoof-proof). The `v1.players.identify.success` data gains an **additive** `parentAccountId` (null for roots / degraded DB).
+- `src/sockets/groups.rs` (new) — `resolve_parent_account_id` (parameterized `SELECT parent_account_id … WHERE status <> 'deleted'`), pure `group_key`, and `resolve_group`.
+
+### Added
+- Hub unit tests: group-level join idempotency (subaccount joins parent's group silently), subaccount ↔ parent chat sharing (both directions, per-conn single delivery), distinct parents as distinct participants (separate join/leave announcements), group-level leave only on the group's last conn, group-level send gate (member group broadcasts, non-participant group is a silent no-op). `groups.rs` pure `group_key` tests + a `#[ignore]`d live-DB test (root → self-group, subaccount → parent-group, unknown → `None`), mirroring the `db.rs` R-7 `MYSQL_URL` pattern. `ws.rs` tests: subaccount message group stamping, join outcome carrying the resolved parent, `parentAccountId` surfaced in identify success. The two existing load tests (100 conns / 1000 broadcasts / 0 drops and 100 conns / 1000 chat broadcasts / 0 drops) are updated for the group-keyed registry with mixed root/subaccount assignments.
+- `tests/ws_integration.rs` — explicit `/ws` upgrade regression guard for the `Option<web::Data<MySqlPool>>` extractor (no-pool app still upgrades; existing no-pool tests also exercise this path).
+
+### Note
+- Group resolution is server-derived from the ticketed alias only (`players.id` lookup) — a client can never choose its own group. Immediate-parent one hop only (nested-subaccount roots are follow-up). Presence stays per-alias; grouping applies to channel participation only. Recorded as a `docs/memory.md` decision.
+
+---
+
 ## [Unreleased] — 2026-08-25 — WebSocket chat message broadcast (task 0.3.13)
 
 ### Changed
