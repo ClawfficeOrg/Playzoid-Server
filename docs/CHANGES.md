@@ -2,6 +2,132 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — document leaderboard, save & WS shapes (task 0.3.17)
+
+### Changed
+- `docs/TALO_API.md` — the upstream-only leaderboards / game-saves / WebSocket sections are replaced with the **actually implemented** Phase 0.3 surfaces, cross-referenced to the source:
+  - Leaderboards: `GET /leaderboards/{game_id}` (pagination `page`/`per_page`, camelCase `LeaderboardEntryView`/`LeaderboardResponse`), `POST /leaderboards/{game_id}/entries` (201/400/401/404/409/503, props ≤ 4 KB), `PUT /leaderboards/{game_id}/entries/{player_id}` (same-body 200/403 path), with the `SubmitScoreRequest` struct.
+  - Game saves: `POST /saves`, `GET /saves/{player_id}`, `GET /saves/{player_id}/{save_id}`, `DELETE /saves/{player_id}/{save_id}` with the full camelCase `SaveView` and `CreateSaveRequest` structs, own-only 403 semantics, and a 32 KiB blob cap.
+  - WebSocket: `POST /v1/socket-tickets` → `?ticket=` on `GET /ws`, the request tokens (`v1.players.identify`, `v1.channels.join`/`leave`/`message`, `v1.heartbeat`) and server envelopes (`v1.error`, `v1.players.identify.success` with additive `parentAccountId`, `v1.players.presence.updated`, `v1.channels.player-joined`/`player-left`/`message`), error codes, and the subaccount grouping model.
+  - Canonical schema tables for `leaderboards`/`leaderboard_entries`/`game_saves` mirroring the existing `players` section.
+- The intro heading is retitled to "Playzoid-Server Implemented Endpoints (Phases 0.2 & 0.3)" and the "Remaining TODOs" list trimmed to genuinely-remaining upstream items (complex `PlayerAlias`/`PlayerAuth`/`GameChannel`/full `LeaderboardEntry` serde structs, `/v1`-prefix parity).
+
+## [Unreleased] — 2026-08-25 — leaderboard + save endpoint test coverage (task 0.3.16)
+
+### Added
+- `src/entities/leaderboard.rs` — `#[cfg(test)] mod tests` mirroring the sibling `src/entities/save.rs`: `LeaderboardEntryView` serializes to camelCase `{playerId, score, rank}` and `LeaderboardResponse` wraps its `entries` array (previously the only endpoint entity with zero unit tests).
+- `tests/leaderboards_integration.rs` — 10 gap-fill tests: POST missing `score` → 400, POST oversized `props` → 400 (HTTP layer; service unit only before), POST with a never-registered JWT subject → 404 (`PlayerNotFound` path, previously only unknown *board* 404'd), PUT missing `score` → 400, PUT oversized `props` → 400, PUT unknown board → 404 (distinct from `EntryNotFound`), empty board → 200 `entries: []`, page beyond data → 200 `[]` (no clamp/500), non-numeric pagination → 400 (Query deser fail) and equal-score tie broken by earlier submission (rank 1 for the first seed).
+- `tests/saves_integration.rs` — 5 gap-fill tests: `"save": null` → 400 (NOT NULL guard, service unit only before), 256-char name → 400, exact 255-char name → 201 (upper-boundary pass), small save + oversized metadata → 400 (combined-size cap), and second `DELETE` of an already-deleted save → 404 (idempotency boundary).
+
+### Verified
+- `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test` all green (137 passed). Ignored integration suite run against the Docker dev stack: `tests/leaderboards_integration.rs` 26/26 passed, `tests/saves_integration.rs` 29/29 passed.
+
+## [Unreleased] — 2026-08-25 — WebSocket load test (task 0.3.15)
+
+### Added
+- `tests/ws_load.rs` — standalone integration load/throughput test for the in-process `ChannelHub` fan-out path: **100 concurrent subscriber connections, 1000 chat messages, 0 dropped or double-delivered envelopes**. Registers 100 live subscriber actors in one channel (cumulative 5050 `joined` fans), broadcasts 1000 chat messages (100k deliveries), then asserts the exact final event count. Placed in `tests/` per the task's owned paths and driven entirely through the public crate API (`ChannelHub`, `JoinChannel`, `ChannelMessage`, `ChannelNotification`).
+
+## [Unreleased] — 2026-08-25 — WebSocket subaccount participant support (task 0.3.14)
+
+### Changed
+- `src/sockets/channels.rs` — the channel hub's membership registry is rekeyed to **participant groups**: `channel → group → alias → conn_key → Recipient`, with the reverse index widened to `conn_key → (channel, group, alias)`. A channel's participants are its distinct groups (server-resolved `parent_account_id`, or the alias itself for roots), so the first connection of a group announces `v1.channels.player-joined` (carrying the joining alias), the last connection announces `v1.channels.player-left` (carrying the departing alias), and chat fans out to every connection across the channel's participant groups — a subaccount and its parent share membership and each other's chat. `JoinChannel`/`LeaveChannel` carry the alias's resolved `parent_account_id` (the hub derives the group); `ChannelMessage` carries a server-stamped `group` and the send gate is group-level membership. `LeaveAllChannels` now keys on `conn_key` only (the reverse index already knows each membership's channel/group/alias). Envelopes stay Talo-verified and per-alias — grouping is visible only in membership sharing.
+- `src/sockets/ws.rs` — `WsConn` gains the server-resolved `parent_account_id` and `ws_index` gains an `Option<web::Data<MySqlPool>>` extractor that resolves it best-effort on connect (missing pool / unknown alias / lookup error degrade to `None`, never failing the connection). `FrameOutcome::JoinChannel` carries the parent; the message handler stamps the sender's group from the ticketed alias + resolved parent (spoof-proof). The `v1.players.identify.success` data gains an **additive** `parentAccountId` (null for roots / degraded DB).
+- `src/sockets/groups.rs` (new) — `resolve_parent_account_id` (parameterized `SELECT parent_account_id … WHERE status <> 'deleted'`), pure `group_key`, and `resolve_group`.
+
+### Added
+- Hub unit tests: group-level join idempotency (subaccount joins parent's group silently), subaccount ↔ parent chat sharing (both directions, per-conn single delivery), distinct parents as distinct participants (separate join/leave announcements), group-level leave only on the group's last conn, group-level send gate (member group broadcasts, non-participant group is a silent no-op). `groups.rs` pure `group_key` tests + a `#[ignore]`d live-DB test (root → self-group, subaccount → parent-group, unknown → `None`), mirroring the `db.rs` R-7 `MYSQL_URL` pattern. `ws.rs` tests: subaccount message group stamping, join outcome carrying the resolved parent, `parentAccountId` surfaced in identify success. The two existing load tests (100 conns / 1000 broadcasts / 0 drops and 100 conns / 1000 chat broadcasts / 0 drops) are updated for the group-keyed registry with mixed root/subaccount assignments.
+- `tests/ws_integration.rs` — explicit `/ws` upgrade regression guard for the `Option<web::Data<MySqlPool>>` extractor (no-pool app still upgrades; existing no-pool tests also exercise this path).
+
+### Note
+- Group resolution is server-derived from the ticketed alias only (`players.id` lookup) — a client can never choose its own group. Immediate-parent one hop only (nested-subaccount roots are follow-up). Presence stays per-alias; grouping applies to channel participation only. Recorded as a `docs/memory.md` decision.
+
+---
+
+## [Unreleased] — 2026-08-25 — WebSocket chat message broadcast (task 0.3.13)
+
+### Changed
+- `src/sockets/channels.rs` — the channel hub now broadcasts chat too. A new `ChannelMessage` message (`channel_id`, ticketed sender `alias_id`, text) fans out the Talo-shaped `v1.channels.message` envelope (`channel.id`, plain-string `message`, sender `playerAlias.id`) to **every member connection, sender included** — the 0.3.10 echo shape (`{ id, from: "server", message:{…} }` with timestamp+counter message ids) is dropped in favor of the verified upstream fan-out. Membership recipients were re-typed to a single joint notification enum `ChannelNotification` (`Change(ChannelChange)` | `Message(ChannelMessage)`), so one `Recipient` per connection carries both join/leave and chat fan-outs from the same registry. The hub prunes dead recipients per broadcast, and only members may broadcast: a non-member's send — or one into an unknown/empty channel — is a silent no-op (v0 trade-off over Talo's "Player not in channel" rejection). New `channel_message_payload` envelope builder and `MAX_CHAT_MESSAGE_CHARS` (1000) cap.
+- `src/sockets/ws.rs` — the routed `v1.channels.message` request is now `&self` `handle_channels_message`, gated on having identified, validating integer `channelId`, non-empty `message` ≤1000 chars; the sender alias is stamped from the socket ticket (never a body `playerAliasId` claim). `FrameOutcome` gains `BroadcastMessage(ChannelMessage)` and the stream loop dispatches it straight to the hub. `WsConn` implements `Handler<ChannelNotification>` (instead of `Handler<ChannelChange>`) rendering either envelope. `MSG_SEQ` (message-id counter) removed.
+
+### Added
+- Hub unit tests: message fans out to all members incl. sender, per-conn single delivery (one envelope per conn key), unknown-channel no-op, non-member send no-op, `channel_message_payload` shape, plus a chat load test (100 conns, 1000 chat broadcasts → 0 dropped/double-delivered envelopes). `ws.rs` unit tests: broadcast outcome with ticketed (spoof-proof) sender alias, pre-identify error, missing `channelId`/`message` errors, length cap boundary (cap-long accepted, cap+1 rejected); the same-second message-id uniqueness test is removed with the echo shape.
+
+### Note
+- `v1.channels.message` is a Playzoid **request** extension (`channelId` field, like the 0.3.12 join/leave); the response envelope is the verified Talo fan-out shape. Recorded as a `docs/memory.md` decision.
+
+---
+
+### Added
+- `src/sockets/channels.rs` — new in-memory `ChannelHub` actix actor with `JoinChannel` / `LeaveChannel` / `LeaveAllChannels` / `ChannelChange` messages plus the `player_joined_payload` and `player_left_payload` envelope builders. A player joins a channel when its first connection registers and leaves when its last connection drops; both transitions fan out the Talo-shaped `v1.channels.player-joined` (`channel.id`, `playerAlias.id`) and `v1.channels.player-left` (`+ meta.reason` numeric 0) envelopes to member sockets. Joining an already-member alias is idempotent (no re-broadcast) and the departed connection never receives its own leave. Membership is keyed `channel → alias → conn_key`, with a reverse `conn_key → memberships` index so `LeaveAllChannels` (issued on disconnect) is O(a connection's channels), plus a per-membership cap (256 conns) pruning dead recipients. Alias ids only come from the server-resolved socket ticket — client claims are rejected. Process-global `hub()` accessor needs no `main.rs` wiring.
+- `src/sockets/ws.rs` — `process_text_frame` now returns a pure `FrameOutcome` enum (`None` / `Identify` / `JoinChannel` / `LeaveChannel`) instead of a boolean, describing the *intended* hub action so the hot frame loop stays side-effect-free. New `v1.channels.join` / `v1.channels.leave` request tokens: gated on having identified first, `channelId` required (else `INVALID_INPUT`), and dispatched to the channel hub with the ticketed alias. `WsConn` implements `Handler<ChannelChange>` rendering the verified envelopes; `stopping()` additionally sends `LeaveAllChannels` beside the existing `LeavePresence`, so a dropped connection auto-leaves every channel it joined.
+- Hub unit tests: first-join broadcast incl. joiner, alias-level join idempotency (second conn silent but still subscribed), multi-alias join fan-out, leave-only-on-last-conn broadcast to survivors, surviving-conn leave no-op, non-member leave no-op, disconnect leaves all channels, payload shapes (incl. numeric leave reason), plus a load test (100 conns, 1000 membership broadcasts, 0 dropped/double-delivered envelopes). `ws.rs` unit tests: join/leave success outcomes, missing `channelId` errors, pre-identify errors; existing identify tests updated to the `FrameOutcome` return.
+
+### Note
+- `v1.channels.join` / `v1.channels.leave` **request** tokens are a Playzoid extension — upstream Talo drives channel membership over HTTP and only fans the membership changes out over sockets. The response envelopes stay 100% Talo-verified. Recorded as a `docs/memory.md` decision.
+
+---
+
+## [Unreleased] — 2026-08-25 — WebSocket presence broadcast (task 0.3.11)
+
+### Added
+- `src/sockets/presence.rs` — new in-memory `PresenceHub` actix actor with `JoinPresence` / `LeavePresence` / `PresenceChange` messages plus the `presence_payload` envelope builder. A player goes `online` when its first identified connection appears and `offline` when its last connection drops; both transitions fan out the Talo-shaped `v1.players.presence.updated` envelope (`presence.playerAlias.id`, `presence.online`, `presence.lastSeenAt`, `meta.onlineChanged`) to every connected socket. Alias ids only ever come from the server-resolved socket ticket — client claims are rejected. Connections are tracked per alias by a unique `conn_key`; the disconnect path (`stopping()`) unregisters via `LeavePresence`, so offline fires exactly on the last disconnect. A per-alias cap (256 conns) prunes dead recipients to bound memory. Process-global `hub()` accessor needs no `main.rs` wiring.
+- `src/sockets/ws.rs` — `WsConn` now carries a unique `conn_key` + `identified` flag; presence registration fires on `v1.players.identify` success (recipient = the connection's own address), matching Talo timing, and `stopping()` unregisters only if the connection had identified. `process_text_frame` became a `&mut self` method that also reports whether the frame armed a presence join.
+- Hub unit tests: online/offline transition fan-out (including to non-transitioning subscribers being excluded), offline-only-on-last-disconnect refcounting, unsubscribe stops delivery, unknown-alias leave ignored, payload shape. `ws.rs` unit tests: identify marks the connection identified / error paths don't, presence alias comes from the resolved ticket (never a body claim), leave arm-only-when-identified.
+- `tests/ws_integration.rs` — upgrade still returns 101 with a valid `?ticket=` (plus the existing no-ticket 101 and method-mismatch cases).
+
+---
+
+## [Unreleased] — 2026-08-25 — WebSocket `/ws` handler (task 0.3.10)
+
+### Added
+- Upgraded `src/sockets/ws.rs` from scaffold to a gated implementation: connections are authenticated via the one-shot `?ticket=` query param (from `POST /v1/socket-tickets`); missing/invalid tickets still upgrade so the client receives the Talo `v1.error` envelope (`INVALID_SOCKET_TOKEN`) then the socket is closed with policy code. `v1.players.identify` now validates `playerAliasId` (required, must match the authenticated ticket alias) and `v1.channels.message` rejects missing/empty `channelId`/`message` with `INVALID_INPUT`; message ids are unique via timestamp + atomic counter (same-second collisions avoided); unknown requests → `UNHANDLED_REQUEST`; malformed JSON → `INVALID_JSON`. `tracing::instrument` added to `ws_index`; no more `#[allow(dead_code)]` stubs.
+- `src/sockets/ws.rs` — 10 new unit tests: identify success/missing alias/mismatched alias/no ticket, channel message success/missing channelId/missing+empty message, same-second id uniqueness, unknown request, invalid JSON.
+- `tests/ws_integration.rs` — new integration tests that need no DB/Redis: `/ws` upgrade handshake returns 101 + `Sec-WebSocket-Accept`, POST to `/ws` returns 405.
+
+---
+
+## [Unreleased] — 2026-08-25 — Delete a single game save (task 0.3.9)
+
+### Added
+- `DELETE /saves/{player_id}/{save_id}` — auth-gated deletion of one save. `{player_id}` must match the JWT identity (403 before any SQL); the `DELETE` is scoped to the owning player's internal id, so an unknown `{save_id}` — or one owned by a different player — affects zero rows and returns 404 (cross-player deletes never leak). Unknown or soft-deleted players → 404. Returns 204 No Content on success.
+- `src/services/saves.rs` — added `delete_save` (player-active guard + player-scoped parameterized delete, `rows_affected == 0` → `NotFound`).
+- `src/api/saves.rs` — `delete_save` handler wiring `DELETE /saves/{player_id}/{save_id}` into the existing `/saves` scope; 3 new API-layer unit tests (401, cross-player 403, pool-unavailable 503).
+- `tests/saves_integration.rs` — 6 new integration tests against the Docker dev stack (auth required 401, delete + verify via GET + siblings unaffected 204, cross-player 403, unknown save 404, other player's save 404, soft-deleted player 404).
+
+---
+
+## [Unreleased] — 2026-08-25 — Retrieve a single game save (task 0.3.8)
+
+### Added
+- `GET /saves/{player_id}/{save_id}` — auth-gated retrieval of one save. `{player_id}` must match the JWT identity (403 before any SQL); the save is selected scoped to the owning player's internal id, so an unknown `{save_id}` — or one owned by a different player — returns 404 (cross-player reads never leak). Unknown or soft-deleted players → 404. Returns 200 with the full `SaveView` (camelCase `id`, `playerId`, `name`, `save`, `metadata`, `createdAt`, `updatedAt`).
+- `src/services/saves.rs` — added `get_save` (player-active guard + player-scoped parameterized query).
+- `src/api/saves.rs` — `get_save` handler wiring `GET /saves/{player_id}/{save_id}` into the existing `/saves` scope; 3 new API-layer unit tests (401, cross-player 403, pool-unavailable 503).
+- `tests/saves_integration.rs` — 6 new integration tests against the Docker dev stack (auth required 401, full-blob round-trip 200, cross-player 403, unknown save 404, other player's save 404, soft-deleted player 404).
+
+---
+
+## [Unreleased] — 2026-08-25 — Create game save (task 0.3.7)
+
+### Added
+- `POST /saves` — auth-gated game-save creation. Body `{ "name", "playerId"?, "save", "metadata"? }` (`deny_unknown_fields`, `name` 1–255 chars validator-derived). `playerId` is optional — absent it defaults to the JWT identity; present it must match the JWT (403 cross-player). Returns 201 with the full `SaveView` (camelCase, including `id`, `playerId`, timestamps).
+- Rejects JSON `null` `save` before insert (the column is NOT NULL — a null would otherwise surface as a misleading 500). Combined serialized `save` + `metadata` capped at `MAX_SAVE_BYTES` (32 KiB, under InnoDB's 65,535-byte row limit). Unknown or soft-deleted owning player → 404.
+- `src/services/saves.rs` — added `create_save` (player-active guard, insert-then-read-back, one retry on a UUID `public_id` collision) + `SaveServiceError::Invalid` variant and `MAX_SAVE_BYTES` const; 5 new service unit tests.
+- `src/api/saves.rs` — `CreateSaveRequest` + `create_save` handler wiring `POST /saves`; body-validation 400s precede the ownership 403, which precedes the pool-unavailable 503, and the service re-validates (null blob, size cap) before any SQL; 7 new API-layer unit tests.
+- `tests/saves_integration.rs` — 7 new integration tests against the Docker dev stack (auth required, create + round-trip via GET, omitted optional fields, cross-player 403, unknown fields 400, oversized save 400, soft-deleted player 404).
+
+---
+
+## [Unreleased] — 2026-08-25 — List game saves (task 0.3.6)
+
+### Added
+- `GET /saves/{player_id}` — auth-gated list of the authenticated player's game saves, newest first (`created_at DESC, updated_at DESC`). `{player_id}` must match the JWT identity (403 before any SQL); unknown or soft-deleted players → 404; no saves → 200 `[]`. Returns full `SaveView` objects including the save blobs (Talo `game-saves.getAll` parity).
+- `src/entities/save.rs` — `SaveView` public projection (`id`, `playerId`, `name`, `save`, `metadata`, `createdAt`, `updatedAt`, camelCase) + internal `SaveRow` (`FromRow`, selects no internal id so ordering never depends on it).
+- `src/services/saves.rs` — `list_saves` (player-active guard, parameterized SQL) + `SaveServiceError` (`NotFound` / `Database`).
+- `src/api/saves.rs` — handler + scoped route config + API-layer unit tests; wired into `src/api/mod.rs`, `src/entities/mod.rs`, `src/services/mod.rs`, `src/main.rs`.
+- `tests/saves_integration.rs` — 5 integration tests against the Docker dev stack (auth required 401, cross-player 403, soft-deleted player 404, empty array 200, blobs newest-first with camelCase keys + `playerId`).
+
+---
+
 ## [Unreleased] — 2026-08-25 — Game saves schema (task 0.3.5)
 
 ### Added

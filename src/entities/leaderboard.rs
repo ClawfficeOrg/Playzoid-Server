@@ -39,3 +39,51 @@ pub struct LeaderboardResponse {
     /// Ranked entries, highest score first.
     pub entries: Vec<LeaderboardEntryView>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(player_id: &str, score: i64, rank: u64) -> LeaderboardEntryView {
+        LeaderboardEntryView {
+            player_id: player_id.into(),
+            score,
+            rank,
+        }
+    }
+
+    #[test]
+    fn leaderboard_entry_view_serializes_camel_case() {
+        let view = entry("player-uuid-1", 500, 1);
+
+        let value = serde_json::to_value(&view).expect("serialize");
+        let obj = value.as_object().expect("object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["playerId", "rank", "score"]);
+        assert_eq!(obj["playerId"], "player-uuid-1");
+        assert_eq!(obj["score"], 500);
+        assert_eq!(obj["rank"], 1);
+    }
+
+    #[test]
+    fn leaderboard_response_wraps_entries() {
+        let resp = LeaderboardResponse {
+            entries: vec![
+                entry("player-uuid-1", 500, 1),
+                entry("player-uuid-2", 100, 2),
+            ],
+        };
+
+        let value = serde_json::to_value(&resp).expect("serialize");
+        let obj = value.as_object().expect("object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["entries"]);
+        let entries = obj["entries"].as_array().expect("entries array");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["playerId"], "player-uuid-1");
+        assert_eq!(entries[0]["rank"], 1);
+        assert_eq!(entries[1]["playerId"], "player-uuid-2");
+    }
+}

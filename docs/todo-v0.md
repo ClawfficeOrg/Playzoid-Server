@@ -89,45 +89,51 @@ connections.
   Complexity: Small. Owned paths: `migrations/`.
   Agent: basic_dev_agent
   <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
-- [ ] `0.3.6` Implement `GET /saves/{player_id}` — list saves.
+- [x] `0.3.6` Implement `GET /saves/{player_id}` — list saves.
   Complexity: Small. Owned paths: `src/api/saves.rs` (new),
   `src/services/saves.rs` (new), `src/entities/save.rs` (new).
   Agent: basic_dev_agent
-- [ ] `0.3.7` Implement `POST /saves` — create game save (JSON blob).
+- [x] `0.3.7` Implement `POST /saves` — create game save (JSON blob).
   Complexity: Medium. Owned paths: same as 0.3.6.
   Agent: mid_dev_agent
-- [ ] `0.3.8` Implement `GET /saves/{player_id}/{save_id}` — retrieve save.
+- [x] `0.3.8` Implement `GET /saves/{player_id}/{save_id}` — retrieve save.
   Complexity: Small. Owned paths: same as 0.3.6.
   Agent: basic_dev_agent
-  <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
-- [ ] `0.3.9` Implement `DELETE /saves/{player_id}/{save_id}`.
+  <!-- 0.3.8 done note: implemented 2026-08-25 on task/0.3.8; own-only (403 cross-player) + SaveView 200; player-scoped SQL so other players' saves 404; pending PR + release/v0.3 merge -->
+- [x] `0.3.9` Implement `DELETE /saves/{player_id}/{save_id}`.
   Complexity: Small. Owned paths: same as 0.3.6.
   Agent: basic_dev_agent
-  <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
-- [ ] `0.3.10` Implement WebSocket `/ws` handler with actix-web WS upgrade.
+  <!-- 0.3.9 done note: implemented 2026-08-25 on task/0.3.9; own-only (403 cross-player) + 204 No Content; player-scoped DELETE so other players' saves / unknown ids 404 (never leak); pending PR + release/v0.3 merge -->
+- [x] `0.3.10` Implement WebSocket `/ws` handler with actix-web WS upgrade.
   Complexity: High. Owned paths: `src/sockets/ws.rs`.
   Agent: pro_dev_agent
-- [ ] `0.3.11` WebSocket: player connect/disconnect presence broadcast.
+- [x] `0.3.11` WebSocket: player connect/disconnect presence broadcast.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
-- [ ] `0.3.12` WebSocket: channel join/leave message types.
+  <!-- 0.3.11 done note: implemented 2026-08-25 on task/0.3.11; in-memory PresenceHub (src/sockets/presence.rs) broadcasts Talo v1.players.presence.updated on first-identify online / last-disconnect offline; register-on-identify (Talo timing), alias from ticket only (no spoofing); process-global Lazy hub, no main.rs changes; pending PR + release/v0.3 merge -->
+- [x] `0.3.12` WebSocket: channel join/leave message types.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
-- [ ] `0.3.13` WebSocket: chat message broadcast within channel.
+- [x] `0.3.13` WebSocket: chat message broadcast within channel.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
-- [ ] `0.3.14` WebSocket: subaccount participant support (parent_account_id grouping).
+  <!-- 0.3.13 done note: implemented 2026-08-25 on task/0.3.13; ChannelHub broadcasts verified-Talo `v1.channels.message` (channel.id, string message, sender playerAlias.id) to every member incl. sender via a joint ChannelNotification registry (one Recipient per conn for join/leave + chat); ws layer validate+gates (identify first, integer channelId, non-empty message <= 1000 chars), sender alias always ticketed/spoof-proof; non-member or unknown-channel send = silent no-op (v0 trade-off); load test 100 conns x 1000 chat broadcasts, 0 drops; pending commit + PR + release/v0.3 merge -->
+- [x] `0.3.14` WebSocket: subaccount participant support (parent_account_id grouping).
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
-- [ ] `0.3.15` Write WS load test (100 concurrent connections, message throughput).
+  <!-- 0.3.14 done note: implemented 2026-08-25 on task/0.3.14; ChannelHub rekeyed to channel → group(parent_account_id) → alias → conn_key, groups.rs resolves the parent server-side (best-effort, degraded to per-alias when pool absent/unknown alias) with pure group_key; join/leave/broadcast/prune/leave-all at group level (parent + subaccount share membership + chat; presence stays per-alias); additive parentAccountId in v1.players.identify.success; ws_index gains Option<web::Data<MySqlPool>> extractor; new hub + ws + groups unit tests, updated 100x1000x0-drop load tests, ws_integration no-pool upgrade guard; pending commit + PR + release/v0.3 merge -->
+- [x] `0.3.15` Write WS load test (100 concurrent connections, message throughput).
   Complexity: High. Owned paths: `tests/` or `bench/`.
   Agent: pro_dev_agent
-- [ ] `0.3.16` Write unit + integration tests for leaderboard and save endpoints.
+  <!-- 0.3.15 done note: implemented 2026-08-25 on task/0.3.15; tests/ws_load.rs drives the in-process production ChannelHub fan-out path at the milestone spec — 100 live subscriber actors in one channel, 1000 chat messages broadcast (100k deliveries), exact-count assert proves 0 dropped/double-delivered envelopes; no network WS client crate is vendored so the hub is exercised via its public API, mirroring the unit load tests from src/sockets/channels.rs; pending commit + PR + release/v0.3 merge -->
+- [x] `0.3.16` Write unit + integration tests for leaderboard and save endpoints.
   Complexity: Medium. Owned paths: `tests/`.
   Agent: mid_dev_agent
-- [ ] `0.3.17` Update `docs/TALO_API.md` with leaderboard, save, WS shapes.
+  <!-- 0.3.16 done note: implemented 2026-08-25 on task/0.3.16; gap-fill audit — leaderboard/save suites already inline from 0.3.2–0.3.8, so added the missing boundary/error paths: POST+PUT missing-score 400 and oversized-props 400, POST unknown-player 404, PUT unknown-board 404, empty-board + page-beyond-data 200 [], non-numeric pagination 400, tie-break-by-earlier-submission ranking (10 new tests/leaderboards_integration.rs); save null-save 400, 255-char name upper boundary (201) + 256-char 400, oversized-metadata 400, delete-idempotency second 404 (5 new tests/saves_integration.rs); src/entities/leaderboard.rs gains a #[cfg(test)] mod (camelCase + response wrapper) mirroring entities/save.rs — owned-path note: entity file sits outside tests/ on the AGENTS.md same-file-unit-tests precedent; cargo fmt/clippy/test + full ignored integration suite vs Docker stack all green -->
+- [x] `0.3.17` Update `docs/TALO_API.md` with leaderboard, save, WS shapes.
   Complexity: Small. Owned paths: `docs/TALO_API.md`.
   Agent: basic_dev_agent
+  <!-- 0.3.17 done note: docs-only; TALO_API.md sections for leaderboards, game saves, WS protocol rewritten from upstream-reference to implemented shapes cross-checked against src/api, src/entities, src/services, src/sockets + the two Phase 0.3 migrations; canonical schema tables added for leaderboards/leaderboard_entries/game_saves; Remaining TODOs trimmed -->
   <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
 
 ### Milestone review steps (Phase 0.3)
