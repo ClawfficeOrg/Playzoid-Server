@@ -134,3 +134,46 @@ Load test: 100 conns × 1000 chat broadcasts, 0 dropped/double-delivered.
 Gate checks (`fmt --check` / `clippy -D warnings` / `test`) pass. Commit/push/PR
 deferred by operator instruction — todo-v0.md flipped to `- [x]` with a done
 note pending PR.
+
+## 2026-08-25 22:20
+
+DONE: 0.3.13 merged into release/v0.3.
+
+## 2026-08-25 22:35
+
+DONE: task 0.3.14 — WebSocket subaccount participant support
+(parent_account_id grouping), implemented on task/0.3.14.
+- `src/sockets/groups.rs` (new): `resolve_parent_account_id` (parameterized
+  `SELECT parent_account_id … WHERE status <> 'deleted'`), pure `group_key`
+  (root → self, subaccount → parent), `resolve_group`; `#[ignore]`d live-DB
+  test mirroring the `db.rs` R-7 `MYSQL_URL` pattern.
+- `src/sockets/channels.rs`: registry rekeyed to
+  `channel → group → alias → conn_key → Recipient<ChannelNotification>` with
+  reverse `conn_key → (channel, group, alias)`; join/leave/broadcast/prune/
+  leave-all at group level. `JoinChannel`/`LeaveChannel` carry the resolved
+  `parent_account_id`; `ChannelMessage` carries the server-stamped `group`
+  (send gate = group-level membership); `LeaveAllChannels` keys on `conn_key`
+  only. Envelopes stay Talo-verified per-alias (grouping visible only in
+  membership sharing).
+- `src/sockets/ws.rs`: `WsConn.parent_account_id`; `ws_index` gains an
+  `Option<web::Data<MySqlPool>>` extractor, best-effort resolution on connect
+  (pool absent / unknown alias / lookup error → None, never fails the
+  connection); join outcome carries the parent; additive `parentAccountId` in
+  `v1.players.identify.success` data.
+- Tests: hub group-semantics suite (join-once-per-group, parent↔sub chat
+  sharing, distinct parents distinct participants, group leave on last conn,
+  group-level send gate), `group_key` pure tests, ws.rs subaccount stamping +
+  join-parent tests, updated load tests (100 conns × 1000 broadcasts / 1000
+  chat, 0 drops, mixed root/subaccount groups), `tests/ws_integration.rs`
+  no-pool upgrade regression guard (existing no-pool tests also cover the
+  Option<Data<Pool>> absent path).
+- **Documented deviations/decisions:** (1) grouping is server-resolved from the
+  ticketed alias only — spoof-proof; (2) additive `parentAccountId` in
+  `identify.success` instead of touching verified broadcast envelopes (Talo
+  parity doctrine from 0.3.12/0.3.13); (3) degraded-DB mode = per-alias
+  identity; (4) one-hop immediate parent only (nested-subaccount roots are
+  follow-up) — all recorded in `docs/memory.md`; surfaced here per the R-7/M
+  do-not-guess rule.
+Gate checks (`fmt --check` / `clippy -D warnings` / `test`) pass. Commit/push/
+PR deferred by operator instruction — todo-v0.md flipped to `- [x]` with a
+done note pending PR.

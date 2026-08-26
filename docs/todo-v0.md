@@ -118,9 +118,10 @@ connections.
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
   <!-- 0.3.13 done note: implemented 2026-08-25 on task/0.3.13; ChannelHub broadcasts verified-Talo `v1.channels.message` (channel.id, string message, sender playerAlias.id) to every member incl. sender via a joint ChannelNotification registry (one Recipient per conn for join/leave + chat); ws layer validate+gates (identify first, integer channelId, non-empty message <= 1000 chars), sender alias always ticketed/spoof-proof; non-member or unknown-channel send = silent no-op (v0 trade-off); load test 100 conns x 1000 chat broadcasts, 0 drops; pending commit + PR + release/v0.3 merge -->
-- [ ] `0.3.14` WebSocket: subaccount participant support (parent_account_id grouping).
+- [x] `0.3.14` WebSocket: subaccount participant support (parent_account_id grouping).
   Complexity: Medium. Owned paths: `src/sockets/`.
   Agent: mid_dev_agent
+  <!-- 0.3.14 done note: implemented 2026-08-25 on task/0.3.14; ChannelHub rekeyed to channel → group(parent_account_id) → alias → conn_key, groups.rs resolves the parent server-side (best-effort, degraded to per-alias when pool absent/unknown alias) with pure group_key; join/leave/broadcast/prune/leave-all at group level (parent + subaccount share membership + chat; presence stays per-alias); additive parentAccountId in v1.players.identify.success; ws_index gains Option<web::Data<MySqlPool>> extractor; new hub + ws + groups unit tests, updated 100x1000x0-drop load tests, ws_integration no-pool upgrade guard; pending commit + PR + release/v0.3 merge -->
 - [ ] `0.3.15` Write WS load test (100 concurrent connections, message throughput).
   Complexity: High. Owned paths: `tests/` or `bench/`.
   Agent: pro_dev_agent

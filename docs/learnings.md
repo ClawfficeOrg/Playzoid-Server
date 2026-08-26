@@ -4,6 +4,30 @@ Per-task learnings: what worked, what bit, what to do differently.
 One `## X.Y.Z — Title` section per task, newest first. Keep entries short —
 bullets over prose. Read the last few sections before starting a similar task.
 
+## 0.3.14 — WS subaccount participant grouping
+
+- Group keys derive server-side from the ticketed alias only
+  (`SELECT parent_account_id … WHERE status <> 'deleted'`); never accept a
+  group/parent from the client. Grouping is a DB lookup on connect, best-effort:
+  missing pool / unknown alias / lookup error → per-alias identity, and the
+  connection still proceeds.
+- Rekey membership to `channel → group → alias → conn_key` and widen the
+  reverse index to `conn_key → (channel, group, alias)`. The alias must live in
+  the reverse index, otherwise the group's last-conn `player-left` cannot name
+  *which* alias departed. Learning a new dimension of the same hub pattern.
+- Group-level leaf-ness ≠ alias-level: a group is a participant until its *last
+  conn across all its aliases* leaves. Multi-alias groups (parent + subaccount)
+  need the same refcount discipline one level up.
+- `Option<web::Data<MySqlPool>>` is the actix idiom for a DB pool that may be
+  absent (degraded mode); `web::Data<T>` alone makes the handler 500. Existing
+  no-pool integration tests double as the extractor's regression guard.
+- Identifier widening: `players.id` is BIGINT UNSIGNED — decode `u64` (matches
+  `entities::Player`), widen to `i64` at the socket layer, never bind an i64
+  into an unsigned column where types could mismatch.
+- Keep broadcast envelopes Talo-verified: surface the parent relationship as an
+  *additive* optional field in a request-side response (`identify.success`),
+  never as a change to the verified fan-out shapes.
+
 ## 0.3.12 — WS channel join/leave
 
 - Upstream Talo has no `v1.channels.join`/`leave` request token — membership is
