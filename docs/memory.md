@@ -88,6 +88,34 @@ to `docs/memory.md` as part of the standard repo layout.
 
 ---
 
+### 2026-08-25 — Game saves are own-only reads returning full blobs
+
+- **Context:** Task 0.3.6 adds `GET /saves/{player_id}`. Profile reads
+  (`GET /players/{id}`) are free reads for any authenticated user, but game
+  saves are private per-player game state, and Talo's `game-saves.getAll`
+  returns full save blobs.
+- **Options considered:**
+  - Free-read (any authenticated user may list anyone's saves) — matches
+    profile reads but leaks private game state.
+  - Own-only read with 403 for cross-player — treats saves like leaderboard
+    entries; private by default.
+  - Metadata-only list (no blobs) — smaller payloads but breaks parity with
+    `game-saves.getAll` and forces an extra fetch per slot.
+- **Decision:** Saves are **own-only** — a request whose `{player_id}`
+  differs from the JWT identity returns 403 before any SQL. Lists return the
+  full `SaveView` objects **including blobs**, newest first
+  (`created_at DESC, updated_at DESC`). No pagination for this Small task; a
+  player with no saves gets 200 `[]`. A parent may *not* read a subaccount's
+  saves (open question pending product input).
+- **Consequences:**
+  - `/saves` gets no Redis cache (matches the leaderboard services; DB-only).
+  - No internal `id` is selected in the list query — the ORDER BY uses
+    `updated_at` explicitly as the tie-break, keeping `SaveRow` free of dead fields.
+  - Single-save retrieval (0.3.8) and creation (0.3.7) reuse the same
+    `SaveView` shape.
+
+---
+
 <!-- Append new decisions below this line. Use the dated heading format above. -->
 
 ---

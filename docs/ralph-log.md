@@ -15,6 +15,16 @@ Format:
 
 <!-- ralph appends entries below this line -->
 
+## 2026-08-25 23:40
+
+DONE: task 0.3.6 — implemented `GET /saves/{player_id}` (list saves).
+Entity (`src/entities/save.rs`), service (`src/services/saves.rs`),
+handler (`src/api/saves.rs`), wire-up (mod files + `main.rs`), unit tests
+(3 API + entity + service), integration suite `tests/saves_integration.rs`
+(5 `#[ignore]`d tests, Docker dev stack). Gate checks
+(`fmt --check` / `clippy -D warnings` / `test`) all pass. Commit/push/PR
+deferred by operator instruction — todo-v0.md status row left open pending PR.
+
 ## 2026-05-27 09:53
 
 Session complete. Tasks completed: 0 of 0 attempted.

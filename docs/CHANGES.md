@@ -2,6 +2,17 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — List game saves (task 0.3.6)
+
+### Added
+- `GET /saves/{player_id}` — auth-gated list of the authenticated player's game saves, newest first (`created_at DESC, updated_at DESC`). `{player_id}` must match the JWT identity (403 before any SQL); unknown or soft-deleted players → 404; no saves → 200 `[]`. Returns full `SaveView` objects including the save blobs (Talo `game-saves.getAll` parity).
+- `src/entities/save.rs` — `SaveView` public projection (`id`, `playerId`, `name`, `save`, `metadata`, `createdAt`, `updatedAt`, camelCase) + internal `SaveRow` (`FromRow`, selects no internal id so ordering never depends on it).
+- `src/services/saves.rs` — `list_saves` (player-active guard, parameterized SQL) + `SaveServiceError` (`NotFound` / `Database`).
+- `src/api/saves.rs` — handler + scoped route config + API-layer unit tests; wired into `src/api/mod.rs`, `src/entities/mod.rs`, `src/services/mod.rs`, `src/main.rs`.
+- `tests/saves_integration.rs` — 5 integration tests against the Docker dev stack (auth required 401, cross-player 403, soft-deleted player 404, empty array 200, blobs newest-first with camelCase keys + `playerId`).
+
+---
+
 ## [Unreleased] — 2026-08-25 — Game saves schema (task 0.3.5)
 
 ### Added
