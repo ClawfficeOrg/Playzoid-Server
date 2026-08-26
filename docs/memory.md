@@ -444,6 +444,35 @@ docs.trytalo.com `/docs/sockets/responses` (canonical types: `Prop`,
 
 ---
 
+## 2026-08-26 — `game_settings`: opaque route id, no FK until a games table exists (task 0.4.3)
+
+**Context:** task 0.4.3 adds the `game_settings` table backing
+`GET/PUT /v1/games/{game_id}/settings`. Upstream addresses games by an opaque
+route id, but Playzoid v0 has no `games` table yet, so the column cannot
+foreign-key anywhere.
+
+**Options considered:**
+- Wait for a `games` table and add the FK then — blocks settings work behind
+  an unscoped task.
+- Invent a minimal `games` table in this task — scope creep beyond owned
+  paths (`migrations/`) and guesses at a schema no task specifies.
+- Store the route id directly with a unique constraint, no FK (chosen).
+
+**Decision:** `game_id VARCHAR(64) NOT NULL UNIQUE` holds the opaque route
+identifier, mirroring the leaderboards' `internal_name` convention; the
+internal BIGINT id never leaves the server (players/game_saves precedent).
+`config JSON NOT NULL` carries arbitrary per-game configuration, one row per
+game via the unique constraint. Size capping is deliberately not in-schema —
+MySQL JSON columns cannot be size-bounded — and belongs to the API layer
+(task 0.4.4), same split as the leaderboards' props ≤ 4 KB rule.
+
+**Consequences:**
+- When a `games` table lands, adding the FK is a small follow-up migration;
+  existing rows already key on route ids.
+- PUT upsert semantics live in task 0.4.4.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
