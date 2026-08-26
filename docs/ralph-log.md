@@ -81,3 +81,25 @@ DONE: 0.3.9 merged into release/v0.3.
 ## 2026-08-25 21:29
 
 DONE: 0.3.10 merged into release/v0.3.
+
+## 2026-08-25 21:44
+
+DONE: 0.3.11 merged into release/v0.3.
+
+## 2026-08-25 21:55
+
+IMPLEMENTED: 0.3.12 (WebSocket channel join/leave message types) on
+task/0.3.12. New `src/sockets/channels.rs` — in-memory `ChannelHub` actor
+(`JoinChannel`/`LeaveChannel`/`LeaveAllChannels`/`ChannelChange`), verified Talo
+`v1.channels.player-joined`/`player-left` payload builders (`meta.reason` numeric
+0), reverse conn→memberships index, cap+prune mirroring `presence.rs`. Wired in
+`ws.rs`: `process_text_frame` → pure `FrameOutcome` enum (`None`/`Identify`/
+`JoinChannel`/`LeaveChannel`), `v1.channels.join`/`leave` gated on identify +
+integer `channelId`, dispatched to the hub with the ticketed alias (never
+client-supplied); `stopping()` also sends `LeaveAllChannels`; `WsConn` renders
+`ChannelChange`. `mod.rs` registers the module. **Documented deviation:** the
+join/leave *request* tokens are a Playzoid socket extension — upstream Talo has
+no such request (membership is HTTP-driven); response envelopes stay 100%
+Talo-verified (decision recorded in `docs/memory.md`, surfaced here per the
+do-not-guess rule). Gate checks (`fmt --check` / `clippy -D warnings` /
+`test`) pass. Commit/push/PR deferred by operator instruction.
