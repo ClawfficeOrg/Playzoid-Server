@@ -1,11 +1,12 @@
 //! `/saves` HTTP endpoints.
 //!
-//! `POST /saves`                 — create a game save (auth required).
-//! `GET  /saves/{player_id}`     — list the authenticated player's game saves,
-//!                                 newest first (auth required). Saves are
-//!                                 private per-player game state — unlike
-//!                                 profile reads these endpoints only ever
-//!                                 touch the caller's own saves.
+//! `POST /saves`                           — create a game save (auth required).
+//! `GET  /saves/{player_id}`               — list the authenticated player's game saves,
+//!                                           newest first (auth required). Saves are
+//!                                           private per-player game state — unlike
+//!                                           profile reads these endpoints only ever
+//!                                           touch the caller's own saves.
+//! `GET  /saves/{player_id}/{save_id}`     — retrieve a single save (auth required).
 
 use crate::middleware::auth::AuthenticatedUser;
 use crate::services::saves::{self as saves_svc, SaveServiceError};
@@ -19,7 +20,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/saves")
             .route("", web::post().to(create_save))
-            .route("/{player_id}", web::get().to(list_saves)),
+            .route("/{player_id}", web::get().to(list_saves))
+            .route("/{player_id}/{save_id}", web::get().to(get_save)),
     );
 }
 
@@ -121,6 +123,42 @@ async fn list_saves(
         }
         Err(e) => {
             tracing::error!(error = ?e, "list_saves failed");
+            HttpResponse::InternalServerError().json(error_body("internal error"))
+        }
+    }
+}
+
+/// Retrieve a single save owned by the authenticated player.
+///
+/// The `{player_id}` path segment must match the JWT identity — cross-player
+/// requests return 403 before any database work. The `{save_id}` is selected
+/// scoped to the owning player's internal id, so an unknown save id — or one
+/// owned by a different player — returns 404 (never leaks). Unknown or
+/// soft-deleted players return 404. Returns 200 with the stored `SaveView`.
+#[tracing::instrument(skip(pool, user))]
+async fn get_save(
+    path: web::Path<(String, String)>,
+    pool: Option<web::Data<MySqlPool>>,
+    user: AuthenticatedUser,
+) -> HttpResponse {
+    let (player_id, save_id) = path.into_inner();
+
+    // Ownership check before the pool check so cross-player requests fail fast.
+    if player_id != user.player_public_id {
+        return HttpResponse::Forbidden().json(error_body("you may only view your own saves"));
+    }
+
+    let Some(pool) = pool else {
+        return HttpResponse::ServiceUnavailable().json(error_body("database unavailable"));
+    };
+
+    match saves_svc::get_save(pool.get_ref(), &player_id, &save_id).await {
+        Ok(view) => HttpResponse::Ok().json(view),
+        Err(SaveServiceError::NotFound) => {
+            HttpResponse::NotFound().json(error_body("player or save not found"))
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "get_save failed");
             HttpResponse::InternalServerError().json(error_body("internal error"))
         }
     }
@@ -361,5 +399,57 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── GET /saves/{player_id}/{save_id} ───────────────────────────────────
+
+    #[actix_web::test]
+    async fn get_save_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/saves/player-uuid-1/save-uuid-1")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn get_save_cross_player_returns_403() {
+        // Ownership check runs before the pool check — no pool is registered.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/saves/player-uuid-2/save-uuid-1")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn get_save_without_pool_returns_503() {
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/saves/player-uuid-1/save-uuid-1")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

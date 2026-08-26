@@ -2,6 +2,16 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — Retrieve a single game save (task 0.3.8)
+
+### Added
+- `GET /saves/{player_id}/{save_id}` — auth-gated retrieval of one save. `{player_id}` must match the JWT identity (403 before any SQL); the save is selected scoped to the owning player's internal id, so an unknown `{save_id}` — or one owned by a different player — returns 404 (cross-player reads never leak). Unknown or soft-deleted players → 404. Returns 200 with the full `SaveView` (camelCase `id`, `playerId`, `name`, `save`, `metadata`, `createdAt`, `updatedAt`).
+- `src/services/saves.rs` — added `get_save` (player-active guard + player-scoped parameterized query).
+- `src/api/saves.rs` — `get_save` handler wiring `GET /saves/{player_id}/{save_id}` into the existing `/saves` scope; 3 new API-layer unit tests (401, cross-player 403, pool-unavailable 503).
+- `tests/saves_integration.rs` — 6 new integration tests against the Docker dev stack (auth required 401, full-blob round-trip 200, cross-player 403, unknown save 404, other player's save 404, soft-deleted player 404).
+
+---
+
 ## [Unreleased] — 2026-08-25 — Create game save (task 0.3.7)
 
 ### Added
