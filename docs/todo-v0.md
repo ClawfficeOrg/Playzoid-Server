@@ -93,7 +93,7 @@ connections.
   Complexity: Small. Owned paths: `src/api/saves.rs` (new),
   `src/services/saves.rs` (new), `src/entities/save.rs` (new).
   Agent: basic_dev_agent
-- [ ] `0.3.7` Implement `POST /saves` — create game save (JSON blob).
+- [x] `0.3.7` Implement `POST /saves` — create game save (JSON blob).
   Complexity: Medium. Owned paths: same as 0.3.6.
   Agent: mid_dev_agent
 - [ ] `0.3.8` Implement `GET /saves/{player_id}/{save_id}` — retrieve save.
