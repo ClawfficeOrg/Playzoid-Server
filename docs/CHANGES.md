@@ -2,6 +2,21 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — player feedback endpoint (task 0.4.7)
+
+### Added
+- `POST /v1/feedback` — auth-gated player feedback submission. Body `{ "message": <text> }` with unknown fields rejected; trimmed message must be 1..=1000 chars (`MAX_MESSAGE_CHARS`, socket-chat gate precedent) and its JSON-encoded payload ≤ 4 KiB (`MAX_PROPS_BYTES`, events precedent — escape-heavy control-char input can trip the encoded cap while remaining length-valid). Stored verbatim after trimming.
+- Storage reuses the append-only `analytics_events` table (task 0.4.5): one row per submission with `name = "feedback"` and `props = { "message": ... }` — no new migration; a dedicated table stays a Phase 1.0 candidate (recorded in `docs/memory.md`).
+- Honest-failure contract (deliberate divergence from fire-and-forget events): a post-validation database failure answers `500 {"error": "internal error"}` with details logged server-side only — user content must never be silently dropped. Success: `201 Created {"received": true}`.
+- Best-effort attribution: unknown/deleted callers (or a failing resolution query) store anonymous rows (`player_id NULL`) rather than failing — account state never loses feedback text.
+- `src/services/feedback.rs` — `submit_feedback`, pure pre-SQL `validate`, `FeedbackServiceError` (`Invalid`/`Database`); static `.bind()`-only INSERT into `analytics_events`.
+- `src/api/feedback.rs` — single canonical `/v1/feedback` route (no legacy alias, post-0.4.1 precedent); guard order cheapest-first (auth 401 → pool 503 → validation 400 → insert).
+- Unit tests same-file (API 10 + service 7) + `tests/feedback_integration.rs` (5 `#[ignore]`d live-stack tests incl. deleted-player anonymous storage and writes-nothing-on-reject).
+- Wired into `src/{api,services}/mod.rs` and `src/main.rs`.
+
+### Security note
+- Authenticated-only submission; length + encoded-size caps bound per-request abuse until rate limiting lands (task 0.4.8).
+
 ## [Unreleased] — 2026-08-26 — analytics events ingest endpoint (task 0.4.6)
 
 ### Added

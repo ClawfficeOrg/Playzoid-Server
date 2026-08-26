@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod events;
+pub mod feedback;
 pub mod game_settings;
 pub mod healthz;
 pub mod leaderboards;

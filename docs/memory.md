@@ -579,6 +579,47 @@ authoritative.
 
 ---
 
+## 2026-08-26 — `POST /v1/feedback`: analytics-events sink reuse, honest 500 on DB failure (task 0.4.7)
+
+**Context:** task 0.4.7 adds player feedback submission. Upstream Talo has no
+feedback shape in this repo (no feedback section in `TALO_API.md`, no struct
+in `TALO_API_STRUCTS.md`), the task's owned paths exclude `migrations/` and
+`src/entities/`, and 0.4.5's `analytics_events` schema was built deliberately
+generic (`name` + JSON `props`).
+
+**Decisions:**
+- **Store feedback in `analytics_events`:** one row per submission with
+  `name = "feedback"` and `props = { "message": <trimmed> }`. No dedicated
+  table/migration in v0; rows are never read back by any client-facing
+  endpoint. A dedicated table (ratings, categories, moderation state) remains
+  a Phase 1.0 candidate — if review rejects the sink reuse, the task reopens
+  as a migration follow-up.
+- **Honest failure, not fire-and-forget:** unlike `/v1/events`, feedback is
+  user content — a post-validation database failure answers
+  `500 {"error": "internal error"}` (details logged server-side only)
+  instead of faking success. Rejected: swallowing errors like analytics does
+  (silently loses player messages).
+- **Body `{ "message": ... }` with `deny_unknown_fields`:** trimmed message
+  must be 1..=`MAX_MESSAGE_CHARS` = 1000 chars (socket-chat gate precedent,
+  task 0.3.13) *and* its JSON-encoded `props` ≤ `MAX_PROPS_BYTES` = 4 KiB
+  (events precedent — escape-heavy control-char input can blow the encoded
+  cap while staying length-valid). No client timestamps or rating fields;
+  richer schema defers together with the dedicated-table decision.
+- **Best-effort attribution** identical to events: JWT `public_id` resolves
+  once (`status <> 'deleted'`, saves precedent); an unknown/deleted caller —
+  or a failing resolution query — stores anonymous (`player_id NULL`) rows,
+  never an error. Static `.bind()`-only INSERT.
+- **Canonical-only route** (no legacy alias, post-0.4.1 precedent); guard
+  order cheapest-first: auth 401 → pool 503 → validation 400 → insert.
+
+**Consequences:**
+- Feedback queries ride the existing `(name, created_at)` index; nothing new
+  to migrate or reverse.
+- Rate limiting (0.4.8) still required: caps bound per-request cost but not
+  request frequency.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
