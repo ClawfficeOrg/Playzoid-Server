@@ -2,6 +2,19 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — upstream domain-model structs (task 0.4.2)
+
+### Added
+- `src/entities/prop.rs` — shared `Prop { key, value }` pair used across every upstream entity.
+- `src/entities/player_auth.rs` — `PlayerAuth` (email / `verificationEnabled` / `sessionCreatedAt`); unit-tested to never carry credential material.
+- `src/entities/player_alias.rs` — full `PlayerAlias` + nested `PlayerRef` projection (public UUID id, props, devBuild, optional auth); deserialization verified against real game-channel API fixtures; circular upstream `Player.aliases` omitted by design.
+- `src/entities/game_channel.rs` — `GameChannel` (nullable owner alias, counts, props, `autoCleanup`, `"private"`) and `GameChannelLeavingReason` with hand-written integer serde matching the TS numeric enum.
+- `src/entities/leaderboard.rs` — `LeaderboardSortMode` (`"asc"`/`"desc"`) and a full upstream-parity `LeaderboardEntry` (0-based position, float score, nested alias, hidden flag, entry-level `props`) added **alongside** the existing implemented view structs, which are unchanged.
+- 20 new unit tests covering camelCase wire shapes, upstream fixture round-trips, empty-prop omission, unknown-value rejection, and the no-password invariant.
+
+### Changed
+- `docs/TALO_API.md` — new "Domain models (upstream parity)" section documenting the verified shapes, Rust mappings, and deliberate divergences (f64 score vs BIGINT storage, Option timestamps, unmodelled `groups`/circular refs); first "Remaining TODOs" bullet ticked off. Section-scoped edit only — endpoint-section updates remain owned by task 0.4.13.
+
 ## [Unreleased] — 2026-08-26 — `/v1` route-prefix parity with legacy aliases (task 0.4.1)
 
 ### Changed

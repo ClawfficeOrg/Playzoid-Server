@@ -231,3 +231,27 @@ PHASE_COMPLETE: 0.3 merged to main; tagged v0.3.0. Release review performed manu
 - Known staleness: `docs/TALO_API.md` still describes pre-parity prefixes and
   the Phase 0.2 decision note at its end. NOT edited here — file is owned by
   tasks 0.4.2 / 0.4.13; recorded instead of edited to avoid cross-task edits.
+
+## 2026-08-26 05:50
+
+DONE: 0.4.1 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.2 (branch task/0.4.2)
+
+DONE (implementation; no commit/PR per session instructions):
+- `src/entities/`: new `prop.rs`, `player_auth.rs`, `player_alias.rs`,
+  `game_channel.rs`; `leaderboard.rs` gains `LeaderboardSortMode` + full
+  upstream-parity `LeaderboardEntry` beside the untouched view structs;
+  modules registered in `mod.rs`.
+- Shapes re-verified live against docs.trytalo.com (sockets/responses,
+  leaderboard-api, game-channel-api). Two plan refinements recorded in
+  docs/memory.md: `GameChannel.owner` = full `Option<PlayerAlias>` (no
+  recursion, so the provisional AliasSummary is unnecessary), and alias
+  timestamps `Option` (leaderboard samples omit them).
+- 20 new entity unit tests; security invariant (no password material in
+  PlayerAuth/PlayerAlias) pinned by tests.
+- Docs: TALO_API.md "Domain models (upstream parity)" section + ticked its
+  Remaining-TODOs bullet only (endpoint sections stay owned by 0.4.13);
+  CHANGES.md + memory.md entries.
+- Gate: cargo fmt --check / clippy -D warnings / cargo test all green
+  (163 lib tests passed).
