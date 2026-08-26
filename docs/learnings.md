@@ -94,3 +94,21 @@ bullets over prose. Read the last few sections before starting a similar task.
   `cargo test --test '*' -- --ignored` while compose is up.
 - Unique usernames (`u<uuid12>`) prevent cross-run collisions on the shared
   dev database.
+
+## 0.4.8 — Redis rate limiting
+
+- Cloning a `ServiceRequest` for inspection then building a response from the
+  clone panics: the inner `HttpRequest` lives in an `Rc`, and actix's
+  `match_info_mut()` requires refcount 1. Decide the path first, then consume
+  the request once (`req.into_response(...)` for 429, `service.call(req)`
+  otherwise) — never clone.
+- A middleware whose `call` returns `Pin<Box<dyn Future + 'static>>` cannot
+  capture `&self`. Don't reach for `S: Clone`; store the service as `Arc<S>`
+  (needs only `S: 'static`) and clone the `Arc` before the async block.
+- `web::Data<T>` downcasts on the concrete type, generics included. A generic
+  `RateLimiter<C>` in `app_data` silently mismatches the middleware's lookup —
+  the middleware just never runs. Erase to `Arc<dyn WindowCounter>` (or
+  similar) so the stored type is monomorphic.
+- Object-safe async traits need `Pin<Box<dyn Future + Send>>` returns; to keep
+  them `'static`, copy owned captures (connection clone, key string) before
+  building the future.
