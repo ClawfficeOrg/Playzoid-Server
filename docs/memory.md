@@ -165,6 +165,19 @@ to `docs/memory.md` as part of the standard repo layout.
 
 <!-- Append new decisions below this line. Use the dated heading format above. -->
 
+## 2026-08-25 — WebSocket `/ws` gating and message envelope (task 0.3.10)
+
+Established: socket auth is a one-shot ticket (`POST /v1/socket-tickets` →
+`?ticket=` query param on the ws upgrade), matching the Talo socketToken
+flow; actor stores the resolved `alias_id`. Missing/invalid tickets still
+upgrade so the client gets the `v1.error` envelope (`INVALID_SOCKET_TOKEN`),
+then the socket closes with policy code — no silent unauthenticated sessions.
+Inbound envelope parsing was extracted to a pure `process_text_frame`
+function so happy/error paths are unit-testable without a live socket; all
+input failures return typed `v1.error` codes (`INVALID_JSON`,
+`UNHANDLED_REQUEST`, `INVALID_INPUT`) instead of defaulting to 0/"".
+Message ids are timestamp + atomic counter (unique within the same second).
+
 ---
 
 ## Open Questions / Assumptions

@@ -2,6 +2,15 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — WebSocket `/ws` handler (task 0.3.10)
+
+### Added
+- Upgraded `src/sockets/ws.rs` from scaffold to a gated implementation: connections are authenticated via the one-shot `?ticket=` query param (from `POST /v1/socket-tickets`); missing/invalid tickets still upgrade so the client receives the Talo `v1.error` envelope (`INVALID_SOCKET_TOKEN`) then the socket is closed with policy code. `v1.players.identify` now validates `playerAliasId` (required, must match the authenticated ticket alias) and `v1.channels.message` rejects missing/empty `channelId`/`message` with `INVALID_INPUT`; message ids are unique via timestamp + atomic counter (same-second collisions avoided); unknown requests → `UNHANDLED_REQUEST`; malformed JSON → `INVALID_JSON`. `tracing::instrument` added to `ws_index`; no more `#[allow(dead_code)]` stubs.
+- `src/sockets/ws.rs` — 10 new unit tests: identify success/missing alias/mismatched alias/no ticket, channel message success/missing channelId/missing+empty message, same-second id uniqueness, unknown request, invalid JSON.
+- `tests/ws_integration.rs` — new integration tests that need no DB/Redis: `/ws` upgrade handshake returns 101 + `Sec-WebSocket-Accept`, POST to `/ws` returns 405.
+
+---
+
 ## [Unreleased] — 2026-08-25 — Delete a single game save (task 0.3.9)
 
 ### Added
