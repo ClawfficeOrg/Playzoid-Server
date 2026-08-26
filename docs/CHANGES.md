@@ -2,6 +2,17 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — Create game save (task 0.3.7)
+
+### Added
+- `POST /saves` — auth-gated game-save creation. Body `{ "name", "playerId"?, "save", "metadata"? }` (`deny_unknown_fields`, `name` 1–255 chars validator-derived). `playerId` is optional — absent it defaults to the JWT identity; present it must match the JWT (403 cross-player). Returns 201 with the full `SaveView` (camelCase, including `id`, `playerId`, timestamps).
+- Rejects JSON `null` `save` before insert (the column is NOT NULL — a null would otherwise surface as a misleading 500). Combined serialized `save` + `metadata` capped at `MAX_SAVE_BYTES` (32 KiB, under InnoDB's 65,535-byte row limit). Unknown or soft-deleted owning player → 404.
+- `src/services/saves.rs` — added `create_save` (player-active guard, insert-then-read-back, one retry on a UUID `public_id` collision) + `SaveServiceError::Invalid` variant and `MAX_SAVE_BYTES` const; 5 new service unit tests.
+- `src/api/saves.rs` — `CreateSaveRequest` + `create_save` handler wiring `POST /saves`; body-validation 400s precede the ownership 403, which precedes the pool-unavailable 503, and the service re-validates (null blob, size cap) before any SQL; 7 new API-layer unit tests.
+- `tests/saves_integration.rs` — 7 new integration tests against the Docker dev stack (auth required, create + round-trip via GET, omitted optional fields, cross-player 403, unknown fields 400, oversized save 400, soft-deleted player 404).
+
+---
+
 ## [Unreleased] — 2026-08-25 — List game saves (task 0.3.6)
 
 ### Added

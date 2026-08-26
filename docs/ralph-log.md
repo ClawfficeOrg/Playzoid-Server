@@ -36,3 +36,7 @@ BLOCKED on task 0.3-1: checks still failing after 3 attempts. Fix manually then 
 ## 2026-05-27 11:13
 
 Session complete. Tasks completed: 0 of 1 attempted.
+
+## 2026-08-25 21:01
+
+DONE: 0.3.6 merged into release/v0.3.
