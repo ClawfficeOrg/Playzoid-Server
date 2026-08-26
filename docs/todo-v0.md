@@ -96,10 +96,10 @@ connections.
 - [x] `0.3.7` Implement `POST /saves` — create game save (JSON blob).
   Complexity: Medium. Owned paths: same as 0.3.6.
   Agent: mid_dev_agent
-- [ ] `0.3.8` Implement `GET /saves/{player_id}/{save_id}` — retrieve save.
+- [x] `0.3.8` Implement `GET /saves/{player_id}/{save_id}` — retrieve save.
   Complexity: Small. Owned paths: same as 0.3.6.
   Agent: basic_dev_agent
-  <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
+  <!-- 0.3.8 done note: implemented 2026-08-25 on task/0.3.8; own-only (403 cross-player) + SaveView 200; player-scoped SQL so other players' saves 404; pending PR + release/v0.3 merge -->
 - [ ] `0.3.9` Implement `DELETE /saves/{player_id}/{save_id}`.
   Complexity: Small. Owned paths: same as 0.3.6.
   Agent: basic_dev_agent
