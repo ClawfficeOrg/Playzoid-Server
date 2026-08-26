@@ -3,6 +3,7 @@
 //! Concrete types land here as persistence and upstream-parity modelling
 //! progress (see `docs/TALO_API.md`).
 
+pub mod analytics_event;
 pub mod game_channel;
 pub mod game_setting;
 pub mod leaderboard;

@@ -71,11 +71,12 @@ full Talo API parity documented in `docs/TALO_API.md`.
   Complexity: Small. Owned paths: `migrations/`.
   Agent: basic_dev_agent
   <!-- 0.4.5 done note: migrations/20260826000002_create_analytics_events.{up,down}.sql; append-only by schema (no updated_at/public_id), nullable player_id FK ON DELETE SET NULL (player deletion must never erase event history), generic name+JSON props (typed schema deferred to Phase 1.0; upstream shape undocumented in repo — no columns guessed); minimal indexes (player_id, name+created_at) for high-write log; reversibility verified locally with sqlx-cli against a throwaway mysql:8.0 schema per the 0.4.3 pattern; commit + PR deferred per session instructions -->
-- [ ] `0.4.6` Implement `POST /v1/events` — ingest analytics events
+- [x] `0.4.6` Implement `POST /v1/events` — ingest analytics events
   (batched array body, validate shape, fire-and-forget semantics).
   Complexity: Medium. Owned paths: `src/api/events.rs` (new),
   `src/services/events.rs` (new), `src/entities/analytics_event.rs` (new).
   Agent: mid_dev_agent
+  <!-- 0.4.6 done note: implemented 2026-08-26; canonical-only /v1/events route (no legacy alias, post-0.4.1 precedent); bare JSON array body with deny_unknown_fields per event and no client timestamps (created_at DB-stamped); whole-batch pre-SQL validation (non-empty, ≤100 MAX_BATCH_EVENTS, trimmed name 1..=64 matching VARCHAR(64), serialized props ≤4KiB MAX_PROPS_BYTES); fire-and-forget contract: 202 {"accepted":n} after one batched multi-row INSERT, post-validation DB failures logged+swallowed at API layer (unit-tested via dead pool), pool absent → 503; best-effort attribution (unknown/deleted caller or resolution failure → player_id NULL rows, never 404); INSERT built with sqlx::QueryBuilder::push_values — placeholder scaffolding + push_bind only, no interpolated user data (explicit SQL-safety comment in code); unit tests same-file (API 11 + service 7 + entity 2) + tests/events_integration.rs (10 #[ignore], Docker stack — tests/ nominally 0.4.12's owner, per-endpoint suite precedent from 0.3.x/0.4.4); wired into mods + main.rs (main.rs one-line configure outside owned paths, same accepted deviation as 0.4.4); cargo fmt/clippy/test green; commit + PR deferred per session instructions -->
 - [ ] `0.4.7` Implement `POST /v1/feedback` — player feedback submission.
   Complexity: Small. Owned paths: `src/api/feedback.rs` (new),
   `src/services/feedback.rs` (new).

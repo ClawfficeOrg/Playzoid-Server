@@ -2,6 +2,21 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — analytics events ingest endpoint (task 0.4.6)
+
+### Added
+- `POST /v1/events` — auth-gated batched analytics-event ingest (fire-and-forget). Body is a bare JSON array `[{"name", "props"?}, ...]` validated whole-batch before any SQL: non-empty, ≤100 events (`MAX_BATCH_EVENTS`), trimmed `name` 1..=64 chars matching `VARCHAR(64)`, serialized `props` ≤ 4 KiB mirroring the leaderboards cap; unknown per-event fields rejected at deserialization; no client timestamps (`created_at` DB-stamped, append-only).
+- Fire-and-forget contract: accepted batches answer `202 Accepted {"accepted": n}` after one batched multi-row INSERT; any post-validation database failure is logged (`tracing::error!`) but still answered 202 — telemetry loss must never block clients. Pool absent → 503 (degraded-mode precedent).
+- Best-effort player attribution: JWT identity resolves to the internal `players.id`; unknown/deleted callers store anonymous rows (`player_id NULL`) rather than failing — account state never breaks intake.
+- `src/entities/analytics_event.rs` — `AnalyticsEventRow` insert-shape struct; deliberately no `FromRow`/View (the table is write-only in v0 and never selected).
+- `src/services/events.rs` — `ingest_events` + pure pre-SQL `validate_batch`, `MAX_BATCH_EVENTS`/`MAX_EVENT_NAME_LEN`/`MAX_PROPS_BYTES` caps, `EventsServiceError` (`Invalid`/`Database`). Batched INSERT uses `sqlx::QueryBuilder::push_values` — placeholder scaffolding only, every value bound.
+- `src/api/events.rs` — single canonical `/v1/events` route (no legacy alias, post-0.4.1 precedent); guard order cheapest-first (auth 401 → pool 503 → validation 400 → insert).
+- Unit tests (entity/service/API same-file, incl. dead-DB-still-202 proof) + `tests/events_integration.rs` (10 `#[ignore]`d live-stack tests: attribution, batch atomicity, NULL props, exact-limit boundary, deleted-player anonymization).
+- Wired into `src/{api,services,entities}/mod.rs` and `src/main.rs`.
+
+### Security note
+- Authenticated-only ingest; per-request cost bounded by caps (~400 KiB worst case) until rate limiting lands (task 0.4.8).
+
 ## [Unreleased] — 2026-08-26 — analytics events schema (task 0.4.5)
 
 ### Added
