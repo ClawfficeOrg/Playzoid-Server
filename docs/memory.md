@@ -147,6 +147,22 @@ to `docs/memory.md` as part of the standard repo layout.
 
 ---
 
+### 2026-08-25 — Single-save reads are scoped by internal player id (defense-in-depth)
+
+- **Context:** Task 0.3.8 adds `GET /saves/{player_id}/{save_id}`. The API
+  layer already rejects mismatched `{player_id}` with 403 pre-pool, but the
+  service query could still have been `WHERE public_id = ?` alone.
+- **Decision:** `get_save` resolves the owning player to its internal BIGINT
+  id (active-only) and selects `WHERE public_id = ? AND player_id = <internal>`.
+  A save belonging to another player — or an unknown save id — therefore
+  surfaces as the same 404 as an unknown player, so clients cannot distinguish
+  (and never see) another player's save ids. Same pattern applies to the
+  0.3.9 delete.
+- **Consequences:** No new error variant needed; `SaveServiceError::NotFound`
+  already covers both unknown-player and unknown-save reads.
+
+---
+
 <!-- Append new decisions below this line. Use the dated heading format above. -->
 
 ---

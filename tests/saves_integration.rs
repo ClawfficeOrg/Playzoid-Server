@@ -524,3 +524,166 @@ async fn create_save_soft_deleted_player_returns_404() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// ── GET /saves/{player_id}/{save_id} ─────────────────────────────────────────
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_save_requires_auth() {
+    let (pool, _mgr, cfg) = test_fixtures().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool))
+            .configure(api::saves::config),
+    )
+    .await;
+    let req = test::TestRequest::get()
+        .uri("/saves/player-uuid-1/save-uuid-1")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_save_returns_full_blob() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let save_id = seed_save(
+        &pool,
+        &pid,
+        "slot-1",
+        serde_json::json!({ "level": 3, "hp": 42 }),
+        Some(serde_json::json!({ "zone": "level3" })),
+        "2026-08-25 09:00:00",
+    )
+    .await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let req = test::TestRequest::get()
+        .uri(&format!("/saves/{pid}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["id"], save_id);
+    assert_eq!(body["playerId"], pid);
+    assert_eq!(body["name"], "slot-1");
+    assert_eq!(body["save"], serde_json::json!({ "level": 3, "hp": 42 }));
+    assert_eq!(body["metadata"], serde_json::json!({ "zone": "level3" }));
+    assert!(body["createdAt"].is_string());
+    assert!(body["updatedAt"].is_string());
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_save_cross_player_returns_403() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid_a, _) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let (_, token_b) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let req = test::TestRequest::get()
+        .uri(&format!("/saves/{pid_a}/some-save-id"))
+        .insert_header(("Authorization", format!("Bearer {token_b}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_save_unknown_save_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let req = test::TestRequest::get()
+        .uri(&format!("/saves/{pid}/{}", Uuid::new_v4()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_save_other_players_save_returns_404() {
+    // Save exists, but belongs to a different player → must 404, never leak.
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid_a, token_a) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let (pid_b, _) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let save_id = seed_save(
+        &pool,
+        &pid_b,
+        "slot-b",
+        serde_json::json!({ "hp": 1 }),
+        None,
+        "2026-08-25 09:00:00",
+    )
+    .await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let req = test::TestRequest::get()
+        .uri(&format!("/saves/{pid_a}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token_a}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_save_soft_deleted_player_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let save_id = seed_save(
+        &pool,
+        &pid,
+        "slot-1",
+        serde_json::json!({ "hp": 100 }),
+        None,
+        "2026-08-25 09:00:00",
+    )
+    .await;
+
+    // Soft-delete the player account via DELETE /players/{id}.
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(mgr))
+            .configure(api::saves::config)
+            .configure(api::players::config),
+    )
+    .await;
+    let del = test::TestRequest::delete()
+        .uri(&format!("/players/{pid}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, del).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // The still-valid JWT maps to a soft-deleted player → service 404.
+    let req = test::TestRequest::get()
+        .uri(&format!("/saves/{pid}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
