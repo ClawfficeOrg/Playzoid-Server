@@ -18,13 +18,10 @@ Ralph reads task lines (`- [ ] \`X.Y.Z\``) from the versioned files via
 ## Current
 
 - [`todo-v0.md`](todo-v0.md) — **v0.x**: foundation, auth & player management,
-  leaderboards / game saves / WebSocket channels. Phase 0.3 active. ⭐
-
-## Planned
-
-- v1 — Analytics, config, feedback & production hardening (full Talo API
-  parity, rate limiting, Prometheus metrics, OpenAPI). Detailed plan goes in
-  `docs/todo-v1.md` when the line opens.
+  leaderboards / game saves / WebSocket channels.
+- [`todo-v1.md`](todo-v1.md) — **v0.x line 0.4 active** ⭐: analytics, config,
+  feedback & production hardening (Talo parity, rate limiting, Prometheus
+  metrics, OpenAPI).
 
 ## Conventions
 
