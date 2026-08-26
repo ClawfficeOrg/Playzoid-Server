@@ -62,6 +62,48 @@ pub async fn list_saves(
     Ok(views)
 }
 
+/// Retrieve a single save owned by `player_public_id` and addressable by
+/// `save_public_id`.
+///
+/// The player is resolved to its internal id first and must not be
+/// soft-deleted — a missing or deleted player maps to
+/// [`SaveServiceError::NotFound`]. The save is then selected scoped by that
+/// internal player id, so an unknown `save_public_id` — or one that belongs
+/// to a different player — also maps to [`SaveServiceError::NotFound`]
+/// (cross-player reads never leak, they 404).
+pub async fn get_save(
+    pool: &MySqlPool,
+    player_public_id: &str,
+    save_public_id: &str,
+) -> Result<SaveView, SaveServiceError> {
+    let player_id: Option<(u64,)> =
+        sqlx::query_as("SELECT id FROM players WHERE public_id = ? AND status <> 'deleted'")
+            .bind(player_public_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(SaveServiceError::Database)?;
+
+    let Some((player_id,)) = player_id else {
+        return Err(SaveServiceError::NotFound);
+    };
+
+    let row = sqlx::query_as::<_, SaveRow>(
+        r#"
+        SELECT public_id, name, save, metadata, created_at, updated_at
+        FROM game_saves
+        WHERE public_id = ? AND player_id = ?
+        "#,
+    )
+    .bind(save_public_id)
+    .bind(player_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(SaveServiceError::Database)?
+    .ok_or(SaveServiceError::NotFound)?;
+
+    Ok(SaveView::from((row, player_public_id.to_owned())))
+}
+
 /// Maximum combined serialized size (bytes) accepted for `save` + `metadata`.
 ///
 /// 32 KiB keeps rows comfortably under InnoDB's 65,535-byte row-size limit
