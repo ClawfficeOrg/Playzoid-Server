@@ -687,3 +687,197 @@ async fn get_save_soft_deleted_player_returns_404() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// ── DELETE /saves/{player_id}/{save_id} ──────────────────────────────────────
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn delete_save_requires_auth() {
+    let (pool, _mgr, cfg) = test_fixtures().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool))
+            .configure(api::saves::config),
+    )
+    .await;
+    let req = test::TestRequest::delete()
+        .uri("/saves/player-uuid-1/save-uuid-1")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn delete_save_removes_and_verifies_via_get() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let target_id = seed_save(
+        &pool,
+        &pid,
+        "slot-1",
+        serde_json::json!({ "level": 3, "hp": 42 }),
+        None,
+        "2026-08-25 09:00:00",
+    )
+    .await;
+    seed_save(
+        &pool,
+        &pid,
+        "slot-2",
+        serde_json::json!({ "level": 2, "hp": 80 }),
+        None,
+        "2026-08-25 10:00:00",
+    )
+    .await;
+
+    let app = saves_app!(pool, mgr, cfg);
+
+    let del = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid}/{target_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, del).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let body = test::read_body(resp).await;
+    assert!(body.is_empty(), "204 must have an empty body");
+
+    // The deleted save is gone: GET on it → 404.
+    let get = test::TestRequest::get()
+        .uri(&format!("/saves/{pid}/{target_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, get).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Sibling saves are unaffected.
+    let list = test::TestRequest::get()
+        .uri(&format!("/saves/{pid}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, list).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body.as_array().expect("saves array");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["name"], "slot-2");
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn delete_save_cross_player_returns_403() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid_a, _) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let (_, token_b) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let req = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid_a}/some-save-id"))
+        .insert_header(("Authorization", format!("Bearer {token_b}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn delete_save_unknown_save_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let req = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid}/{}", Uuid::new_v4()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn delete_save_other_players_save_returns_404() {
+    // Save exists, but belongs to a different player → must 404, never leak.
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid_a, token_a) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let (pid_b, _) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let save_id = seed_save(
+        &pool,
+        &pid_b,
+        "slot-b",
+        serde_json::json!({ "hp": 1 }),
+        None,
+        "2026-08-25 09:00:00",
+    )
+    .await;
+
+    let app = saves_app!(pool, mgr, cfg);
+    let req = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid_a}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token_a}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // The other player's save is still intact.
+    let get = test::TestRequest::get()
+        .uri(&format!("/saves/{pid_b}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token_a}")))
+        .to_request();
+    let resp = test::call_service(&app, get).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn delete_save_soft_deleted_player_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+
+    let save_id = seed_save(
+        &pool,
+        &pid,
+        "slot-1",
+        serde_json::json!({ "hp": 100 }),
+        None,
+        "2026-08-25 09:00:00",
+    )
+    .await;
+
+    // Soft-delete the player account via DELETE /players/{id}.
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(mgr))
+            .configure(api::saves::config)
+            .configure(api::players::config),
+    )
+    .await;
+    let del = test::TestRequest::delete()
+        .uri(&format!("/players/{pid}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, del).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // The still-valid JWT maps to a soft-deleted player → service 404.
+    let req = test::TestRequest::delete()
+        .uri(&format!("/saves/{pid}/{save_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
