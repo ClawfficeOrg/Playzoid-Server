@@ -41,7 +41,7 @@ full Talo API parity documented in `docs/TALO_API.md`.
 
 ### Parity & data model
 
-- [ ] `0.4.1` Reconcile route prefixes — move `/auth`, `/players`,
+- [x] `0.4.1` Reconcile route prefixes — move `/auth`, `/players`,
   `/leaderboards`, `/saves` under `/v1` (upstream parity), keep old paths as
   aliases during transition.
   Complexity: Medium. Owned paths: `src/api/`, `tests/`.
