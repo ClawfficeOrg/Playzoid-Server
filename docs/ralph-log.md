@@ -207,3 +207,7 @@ DONE: 0.3.16 merged into release/v0.3.
 ## 2026-08-25 23:22
 
 DONE: 0.3.17 merged into release/v0.3.
+
+## 2026-08-25 23:22
+
+PHASE_BLOCKED: 0.3 review failed after 3 attempts. See /tmp/ralph-line-review-0.3-3.log.
