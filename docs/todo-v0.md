@@ -126,9 +126,10 @@ connections.
   Complexity: High. Owned paths: `tests/` or `bench/`.
   Agent: pro_dev_agent
   <!-- 0.3.15 done note: implemented 2026-08-25 on task/0.3.15; tests/ws_load.rs drives the in-process production ChannelHub fan-out path at the milestone spec — 100 live subscriber actors in one channel, 1000 chat messages broadcast (100k deliveries), exact-count assert proves 0 dropped/double-delivered envelopes; no network WS client crate is vendored so the hub is exercised via its public API, mirroring the unit load tests from src/sockets/channels.rs; pending commit + PR + release/v0.3 merge -->
-- [ ] `0.3.16` Write unit + integration tests for leaderboard and save endpoints.
+- [x] `0.3.16` Write unit + integration tests for leaderboard and save endpoints.
   Complexity: Medium. Owned paths: `tests/`.
   Agent: mid_dev_agent
+  <!-- 0.3.16 done note: implemented 2026-08-25 on task/0.3.16; gap-fill audit — leaderboard/save suites already inline from 0.3.2–0.3.8, so added the missing boundary/error paths: POST+PUT missing-score 400 and oversized-props 400, POST unknown-player 404, PUT unknown-board 404, empty-board + page-beyond-data 200 [], non-numeric pagination 400, tie-break-by-earlier-submission ranking (10 new tests/leaderboards_integration.rs); save null-save 400, 255-char name upper boundary (201) + 256-char 400, oversized-metadata 400, delete-idempotency second 404 (5 new tests/saves_integration.rs); src/entities/leaderboard.rs gains a #[cfg(test)] mod (camelCase + response wrapper) mirroring entities/save.rs — owned-path note: entity file sits outside tests/ on the AGENTS.md same-file-unit-tests precedent; cargo fmt/clippy/test + full ignored integration suite vs Docker stack all green -->
 - [ ] `0.3.17` Update `docs/TALO_API.md` with leaderboard, save, WS shapes.
   Complexity: Small. Owned paths: `docs/TALO_API.md`.
   Agent: basic_dev_agent
