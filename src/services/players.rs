@@ -28,7 +28,7 @@ pub enum PlayerServiceError {
     Internal(#[source] anyhow::Error),
 }
 
-/// Input for [`create_player`]. Mirrors `POST /auth/register`.
+/// Input for [`create_player`]. Mirrors `POST /v1/auth/register`.
 #[derive(Debug, Clone)]
 pub struct NewPlayer<'a> {
     pub username: &'a str,

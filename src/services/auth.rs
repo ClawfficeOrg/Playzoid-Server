@@ -6,8 +6,8 @@
 //! be unit-tested without a database or HTTP runtime.
 //!
 //! `dead_code` is allowed at module scope because the JWT/password helpers
-//! are introduced ahead of their first consumers (the `/auth/login` and
-//! `/auth/register` handlers in the next PR).
+//! are introduced ahead of their first consumers (the `/v1/auth/login` and
+//! `/v1/auth/register` handlers in the next PR).
 #![allow(dead_code)]
 
 use anyhow::{Context, Result, anyhow};

@@ -370,6 +370,34 @@ today's behavior; group resolution never fails a connection.
 
 ---
 
+## 2026-08-26 — `/v1` route-prefix parity via dual-mount aliases (task 0.4.1)
+
+**Decision:** the four gameplay route groups (`auth`, `players`, `leaderboards`,
+`saves`) are mounted at both the canonical upstream-prefixed path
+(`/v1/<group>`, matching Talo) and the legacy unprefixed path (`/<group>`)
+during the transition. Each module builds its routes once in a private
+`scoped(prefix)` helper and `config` registers the scope twice, so the two
+mounts cannot drift; the public `config(&mut web::ServiceConfig)` signatures
+are unchanged and `main.rs` is untouched.
+
+**Rationale:** upstream parity (task 0.4.1) without breaking existing clients
+in one step. The legacy alias removal is deliberately deferred to a later
+hardening task — when it happens, only the second `.service(scoped(...))`
+call per module plus the alias tests need deleting.
+
+**Deliberately unprefixed (infra, not part of the upstream API surface):**
+`/healthz` and `/ws`. `/v1/socket-tickets` already carried the prefix.
+
+**Consequences:**
+- The routed surface temporarily includes both spellings of every gameplay
+  endpoint — documented intent for the transition window.
+- Legacy-alias coverage lives in dedicated tests (unit + integration) so the
+  eventual removal is a visible, test-driven change.
+- `docs/TALO_API.md` still describes the pre-parity prefixes; its update is
+  owned by task 0.4.13 (noted in `docs/ralph-log.md`).
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
