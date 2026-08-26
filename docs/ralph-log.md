@@ -73,3 +73,7 @@ never leaks). Success → 204 No Content. Gate checks
 (`fmt --check` / `clippy -D warnings` / `test`) all pass. Commit/push/PR
 deferred by operator instruction — todo-v0.md flipped to `- [x]` with a
 done note pending PR.
+
+## 2026-08-25 21:22
+
+DONE: 0.3.9 merged into release/v0.3.
