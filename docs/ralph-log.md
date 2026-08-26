@@ -203,3 +203,7 @@ Pending: commit + PR (Closes task 0.3.16) + release/v0.3 merge.
 ## 2026-08-25 23:15
 
 DONE: 0.3.16 merged into release/v0.3.
+
+## 2026-08-25 23:22
+
+DONE: 0.3.17 merged into release/v0.3.
