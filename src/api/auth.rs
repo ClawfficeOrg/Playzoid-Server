@@ -156,6 +156,7 @@ fn error_body(msg: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RateLimitConfig;
     use actix_web::{App, http::StatusCode, test};
 
     /// Ensures that without an injected pool the endpoints return 503 and
@@ -185,6 +186,7 @@ mod tests {
             redis_url: "redis://test".into(),
             jwt_secret: "a".repeat(Config::MIN_JWT_SECRET_LEN),
             jwt_expiry_secs: 3600,
+            rate_limit: RateLimitConfig::default(),
         };
         let app =
             test::init_service(App::new().app_data(web::Data::new(cfg)).configure(config)).await;
@@ -222,6 +224,7 @@ mod tests {
             redis_url: "redis://test".into(),
             jwt_secret: "a".repeat(Config::MIN_JWT_SECRET_LEN),
             jwt_expiry_secs: 3600,
+            rate_limit: RateLimitConfig::default(),
         };
         let app =
             test::init_service(App::new().app_data(web::Data::new(cfg)).configure(config)).await;
