@@ -504,6 +504,34 @@ upstream per-game settings HTTP endpoint exists, so the task text plus the
 
 ---
 
+## 2026-08-26 — Analytics events: append-only, SET NULL player FK, generic name+JSON schema (task 0.4.5)
+
+**Context:** task 0.4.5 adds the `analytics_events` table backing the batched
+`POST /v1/events` ingest (0.4.6). Upstream Talo's analytics event shape is
+undocumented in this repo (`TALO_API.md` has no events section;
+`TALO_API_STRUCTS.md` has no Event struct) — verified by grep before
+designing. `docs/memory.md` Open Question #6 already pins typed event
+schema as deferred to Phase 1.0.
+
+**Decisions:**
+- **Append-only semantics encoded in schema:** no `updated_at` column
+  (rows are never updated; its omission documents immutability intent)
+  and no `public_id` (unlike saves/players, events are write-only
+  fire-and-forget in v0 — clients never address a stored event).
+- **`player_id` nullable + ON DELETE SET NULL**, not CASCADE: events may be
+  emitted pre-identify (anonymous), and deleting a player must never erase
+  their event history — CASCADE would silently rewrite history and break
+  append-only guarantees.
+- **Generic schema:** free-form `name VARCHAR(64)` event key + optional JSON
+  `props`. No upstream-specific columns guessed from an undocumented shape;
+  whatever 0.4.6's batched body needs fits. Typed enum/payload schema lands
+  in Phase 1.0 when upstream shapes are verified.
+- **Minimal indexing for a high-write log:** `(player_id)` for per-player
+  queries, `(name, created_at)` for per-event-type time-range queries. No
+  more — every index taxes ingest throughput.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

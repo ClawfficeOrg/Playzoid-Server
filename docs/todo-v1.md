@@ -67,9 +67,10 @@ full Talo API parity documented in `docs/TALO_API.md`.
 
 ### Analytics & feedback
 
-- [ ] `0.4.5` DB migration: `analytics_events` table (append-only event log).
+- [x] `0.4.5` DB migration: `analytics_events` table (append-only event log).
   Complexity: Small. Owned paths: `migrations/`.
   Agent: basic_dev_agent
+  <!-- 0.4.5 done note: migrations/20260826000002_create_analytics_events.{up,down}.sql; append-only by schema (no updated_at/public_id), nullable player_id FK ON DELETE SET NULL (player deletion must never erase event history), generic name+JSON props (typed schema deferred to Phase 1.0; upstream shape undocumented in repo — no columns guessed); minimal indexes (player_id, name+created_at) for high-write log; reversibility verified locally with sqlx-cli against a throwaway mysql:8.0 schema per the 0.4.3 pattern; commit + PR deferred per session instructions -->
 - [ ] `0.4.6` Implement `POST /v1/events` — ingest analytics events
   (batched array body, validate shape, fire-and-forget semantics).
   Complexity: Medium. Owned paths: `src/api/events.rs` (new),
