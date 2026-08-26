@@ -2,6 +2,16 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — `/v1` route-prefix parity with legacy aliases (task 0.4.1)
+
+### Changed
+- `src/api/{auth,players,leaderboards,saves}.rs` — the four gameplay route groups are now mounted at their canonical upstream-prefixed paths (`/v1/auth`, `/v1/players`, `/v1/leaderboards`, `/v1/saves`) **and** keep their legacy unprefixed paths (`/auth`, `/players`, `/leaderboards`, `/saves`) as aliases during the transition. Each module extracts a private `scoped(prefix)` builder so both mounts share one route definition (zero drift); `config` signatures unchanged, so `main.rs` needs no edit. `/healthz`, `/ws` and `/v1/socket-tickets` are unchanged.
+- Route tables and section banners in the four modules' doc comments updated to canonical `/v1/...` paths; stale path references in `src/services/auth.rs` / `src/services/players.rs` doc comments refreshed.
+
+### Added
+- Unit tests: per-module legacy-alias routing tests (auth register/login 503-without-pool via alias, players 401/400, leaderboards 401/403, saves 401/403) proving the unprefixed mounts stay wired.
+- Integration tests: `register_via_legacy_path_still_works` + `login_via_legacy_path_still_works` (auth), `get_player_via_legacy_path_still_works` (players), `submit_entry_via_legacy_path_still_works` (leaderboards — submit via legacy, read back via `/v1`, proving shared state), `save_roundtrip_via_legacy_paths_still_works` (saves — create/delete legacy, list canonical). All existing flows repointed to `/v1/...`.
+
 ## [Unreleased] — 2026-08-25 — document leaderboard, save & WS shapes (task 0.3.17)
 
 ### Changed

@@ -1,10 +1,14 @@
-//! `/players` HTTP endpoints.
+//! `/v1/players` HTTP endpoints.
 //!
-//! `GET    /players/{id}`             — fetch a player's public profile (auth required).
-//! `PUT    /players/{id}`             — update own profile (auth required; own account only).
-//! `DELETE /players/{id}`             — soft-delete own account (auth required; own account only).
-//! `GET    /players/{id}/subaccounts` — list own subaccounts (auth required; own account only).
-//! `POST   /players/subaccount`       — create a subaccount under the authenticated player.
+//! `GET    /v1/players/{id}`             — fetch a player's public profile (auth required).
+//! `PUT    /v1/players/{id}`             — update own profile (auth required; own account only).
+//! `DELETE /v1/players/{id}`             — soft-delete own account (auth required; own account only).
+//! `GET    /v1/players/{id}/subaccounts` — list own subaccounts (auth required; own account only).
+//! `POST   /v1/players/subaccount`       — create a subaccount under the authenticated player.
+//!
+//! The routes are also mounted under the legacy unprefixed `/players` alias
+//! for the 0.4.1 transition (upstream parity: canonical paths carry the
+//! `/v1` prefix). Both mounts share one route definition so they cannot drift.
 
 use crate::entities::player::PlayerView;
 use crate::middleware::auth::AuthenticatedUser;
@@ -12,26 +16,33 @@ use crate::services::cache as cache_svc;
 use crate::services::players::{
     self as players_svc, NewPlayer, PlayerServiceError, UpdatePlayerInput,
 };
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpResponse, Scope, web};
 use redis::aio::ConnectionManager;
 use serde::Deserialize;
 use sqlx::MySqlPool;
 use validator::Validate;
 
+/// Register the player routes: canonical `/v1/players` plus the legacy
+/// `/players` alias kept during the 0.4.1 transition.
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/players")
-            // static-segment routes must come before /{id} or actix will
-            // match "subaccount" as an id value
-            .route("/subaccount", web::post().to(create_subaccount))
-            .route("/{id}/subaccounts", web::get().to(list_subaccounts))
-            .route("/{id}", web::get().to(get_player))
-            .route("/{id}", web::put().to(update_player))
-            .route("/{id}", web::delete().to(delete_player)),
-    );
+    cfg.service(scoped("/v1/players"))
+        .service(scoped("/players"));
 }
 
-// ── GET /players/{id} ─────────────────────────────────────────────────────────
+/// Build the player routes under the given scope prefix so the canonical and
+/// legacy mounts share a single route definition.
+fn scoped(prefix: &str) -> Scope {
+    web::scope(prefix)
+        // static-segment routes must come before /{id} or actix will
+        // match "subaccount" as an id value
+        .route("/subaccount", web::post().to(create_subaccount))
+        .route("/{id}/subaccounts", web::get().to(list_subaccounts))
+        .route("/{id}", web::get().to(get_player))
+        .route("/{id}", web::put().to(update_player))
+        .route("/{id}", web::delete().to(delete_player))
+}
+
+// ── GET /v1/players/{id} ─────────────────────────────────────────────────────────
 
 /// Fetch a player's public profile by `public_id`.
 ///
@@ -83,7 +94,7 @@ async fn get_player(
     }
 }
 
-// ── PUT /players/{id} ─────────────────────────────────────────────────────────
+// ── PUT /v1/players/{id} ─────────────────────────────────────────────────────────
 
 /// Fields that may be updated on a player profile.
 #[derive(Debug, Deserialize, Validate)]
@@ -149,7 +160,7 @@ async fn update_player(
     }
 }
 
-// ── DELETE /players/{id} ──────────────────────────────────────────────────────
+// ── DELETE /v1/players/{id} ──────────────────────────────────────────────────────
 
 /// Soft-delete the authenticated player's own account.
 ///
@@ -189,7 +200,7 @@ async fn delete_player(
     }
 }
 
-// ── POST /players/subaccount ──────────────────────────────────────────────────
+// ── POST /v1/players/subaccount ──────────────────────────────────────────────────
 
 /// Request body for creating a subaccount under the authenticated player.
 #[derive(Debug, Deserialize, Validate)]
@@ -245,7 +256,7 @@ async fn create_subaccount(
     }
 }
 
-// ── GET /players/{id}/subaccounts ─────────────────────────────────────────────
+// ── GET /v1/players/{id}/subaccounts ─────────────────────────────────────────────
 
 /// List all non-deleted subaccounts for the given parent player.
 ///
@@ -304,7 +315,7 @@ mod tests {
         auth_svc::issue_jwt(SECRET, player_id, 3600).expect("issue token")
     }
 
-    // ── GET /players/{id} ──────────────────────────────────────────────────
+    // ── GET /v1/players/{id} ──────────────────────────────────────────────────
 
     #[actix_web::test]
     async fn get_player_requires_auth() {
@@ -315,7 +326,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/players/some-id")
+            .uri("/v1/players/some-id")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -331,14 +342,14 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/players/player-uuid-1")
+            .uri("/v1/players/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // ── PUT /players/{id} ──────────────────────────────────────────────────
+    // ── PUT /v1/players/{id} ──────────────────────────────────────────────────
 
     #[actix_web::test]
     async fn update_player_requires_auth() {
@@ -349,7 +360,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/players/some-id")
+            .uri("/v1/players/some-id")
             .set_json(serde_json::json!({"username": "newname"}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -366,7 +377,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/players/player-uuid-1")
+            .uri("/v1/players/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"username": "ab"}))
             .to_request();
@@ -384,7 +395,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/players/player-uuid-1")
+            .uri("/v1/players/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"email": "not-an-email"}))
             .to_request();
@@ -402,7 +413,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/players/player-uuid-1")
+            .uri("/v1/players/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"username": "validname"}))
             .to_request();
@@ -410,7 +421,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // ── DELETE /players/{id} ───────────────────────────────────────────────
+    // ── DELETE /v1/players/{id} ───────────────────────────────────────────────
 
     #[actix_web::test]
     async fn delete_player_requires_auth() {
@@ -421,7 +432,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::delete()
-            .uri("/players/some-id")
+            .uri("/v1/players/some-id")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -437,14 +448,14 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::delete()
-            .uri("/players/player-uuid-1")
+            .uri("/v1/players/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // ── POST /players/subaccount ───────────────────────────────────────────
+    // ── POST /v1/players/subaccount ───────────────────────────────────────────
 
     #[actix_web::test]
     async fn create_subaccount_requires_auth() {
@@ -455,7 +466,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/players/subaccount")
+            .uri("/v1/players/subaccount")
             .set_json(serde_json::json!({"username": "child", "password": "pass12345"}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -472,7 +483,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/players/subaccount")
+            .uri("/v1/players/subaccount")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"username": "child", "password": "short"}))
             .to_request();
@@ -490,7 +501,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/players/subaccount")
+            .uri("/v1/players/subaccount")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"username": "child", "password": "pass12345678"}))
             .to_request();
@@ -498,7 +509,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // ── GET /players/{id}/subaccounts ──────────────────────────────────────
+    // ── GET /v1/players/{id}/subaccounts ──────────────────────────────────────
 
     #[actix_web::test]
     async fn list_subaccounts_requires_auth() {
@@ -509,7 +520,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/players/parent-uuid/subaccounts")
+            .uri("/v1/players/parent-uuid/subaccounts")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -525,10 +536,46 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/players/parent-uuid/subaccounts")
+            .uri("/v1/players/parent-uuid/subaccounts")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── Legacy `/players` alias mount (0.4.1 transition) ───────────────────
+
+    /// The unprefixed alias must keep routing identically during transition.
+    #[actix_web::test]
+    async fn get_player_legacy_alias_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/players/some-id")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn create_subaccount_legacy_alias_rejects_short_password() {
+        let token = valid_token("parent-uuid");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/players/subaccount")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({"username": "child", "password": "short"}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
