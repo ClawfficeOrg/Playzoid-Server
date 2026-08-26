@@ -53,10 +53,11 @@ full Talo API parity documented in `docs/TALO_API.md`.
 
 ### Config / game settings
 
-- [ ] `0.4.3` DB migration: `game_settings` table (per-game JSON config,
+- [x] `0.4.3` DB migration: `game_settings` table (per-game JSON config,
   reversible up/down pair).
   Complexity: Small. Owned paths: `migrations/`.
   Agent: basic_dev_agent
+  <!-- 0.4.3 done note: migrations/20260826000001_create_game_settings.{up,down}.sql; reversibility verified locally with sqlx-cli against a throwaway mysql:8.0 schema (full up set applies, ours sorts last lexicographically; one revert drops exactly game_settings). CI sqlx-migrate job runs the same sequence but is NOT a gate: workflow is workflow_dispatch-only and the job is continue-on-error:true -->
 - [ ] `0.4.4` Implement `GET /v1/games/{game_id}/settings` and
   `PUT .../settings` (auth-guarded, validated JSON ≤ size cap).
   Complexity: Medium. Owned paths: `src/api/game_settings.rs` (new),
