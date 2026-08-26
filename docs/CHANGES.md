@@ -2,6 +2,13 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-26 — game settings schema (task 0.4.3)
+
+### Added
+- `migrations/20260826000001_create_game_settings.up.sql` — `game_settings` table: one row per game via unique `game_id` (`VARCHAR(64)`, the opaque route identifier, mirroring the leaderboards' `internal_name` convention — no `games` table exists yet so no FK), NOT NULL JSON `config` blob, `created_at`/`updated_at`. Config size cap is enforced at the API layer (task 0.4.4); MySQL JSON columns cannot be size-bounded in schema.
+- `migrations/20260826000001_create_game_settings.down.sql` — reversible drop.
+- `docs/todo-v1.md` — task 0.4.3 marked done with done-note.
+
 ## [Unreleased] — 2026-08-26 — upstream domain-model structs (task 0.4.2)
 
 ### Added

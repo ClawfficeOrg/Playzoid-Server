@@ -255,3 +255,28 @@ DONE (implementation; no commit/PR per session instructions):
   CHANGES.md + memory.md entries.
 - Gate: cargo fmt --check / clippy -D warnings / cargo test all green
   (163 lib tests passed).
+
+## 2026-08-26 06:22
+
+DONE: 0.4.2 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.3 (branch task/0.4.3)
+
+DONE (implementation; no commit/PR per session instructions):
+- `migrations/20260826000001_create_game_settings.{up,down}.sql` — per-game
+  JSON config table. `game_id VARCHAR(64)` unique (opaque route id, mirrors
+  leaderboards' `internal_name`; no `games` table exists to FK),
+  `config JSON NOT NULL`, timestamps. No DB-level size cap — MySQL JSON
+  columns cannot be size-bounded in schema; cap is API-layer, owned by 0.4.4
+  (same split as leaderboards props ≤ 4 KB).
+- Docs: CHANGES.md entry + todo-v1.md done-note. ralph-log ride-along note:
+  working tree already carried an uncommitted 0.4.2 log line; left intact.
+- Verification: reversibility exercised locally with sqlx-cli against a
+  throwaway mysql:8.0 schema — full up set applies (ours last; timestamp
+  prefix sorts last lexicographically) and a single revert drops exactly
+  `game_settings`, leaving earlier migrations intact. Correction from
+  self-review: the CI `sqlx-migrate` job (.github/workflows/ci.yml) would run
+  the same sequence, but the workflow is `workflow_dispatch`-only (disabled)
+  and the job is `continue-on-error: true` — it is not an automated gate.
+  Real table exercise deferred to 0.4.12 settings integration tests.
+- Gate: cargo fmt --check / clippy -D warnings / cargo test all green.
