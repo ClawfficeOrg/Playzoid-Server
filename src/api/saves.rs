@@ -1,30 +1,39 @@
-//! `/saves` HTTP endpoints.
+//! `/v1/saves` HTTP endpoints.
 //!
-//! `POST /saves`                           — create a game save (auth required).
-//! `GET  /saves/{player_id}`               — list the authenticated player's game saves,
-//!                                           newest first (auth required). Saves are
-//!                                           private per-player game state — unlike
-//!                                           profile reads these endpoints only ever
-//!                                           touch the caller's own saves.
-//! `GET  /saves/{player_id}/{save_id}`     — retrieve a single save (auth required).
-//! `DELETE /saves/{player_id}/{save_id}`    — delete a single save (auth required).
+//! `POST /v1/saves`                           — create a game save (auth required).
+//! `GET  /v1/saves/{player_id}`               — list the authenticated player's game saves,
+//!                                              newest first (auth required). Saves are
+//!                                              private per-player game state — unlike
+//!                                              profile reads these endpoints only ever
+//!                                              touch the caller's own saves.
+//! `GET  /v1/saves/{player_id}/{save_id}`     — retrieve a single save (auth required).
+//! `DELETE /v1/saves/{player_id}/{save_id}`    — delete a single save (auth required).
+//!
+//! The routes are also mounted under the legacy unprefixed `/saves` alias for
+//! the 0.4.1 transition (upstream parity: canonical paths carry the `/v1`
+//! prefix). Both mounts share one route definition so they cannot drift.
 
 use crate::middleware::auth::AuthenticatedUser;
 use crate::services::saves::{self as saves_svc, SaveServiceError};
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpResponse, Scope, web};
 use serde::Deserialize;
 use sqlx::MySqlPool;
 use validator::Validate;
 
-/// Register the `/saves` HTTP routes.
+/// Register the save routes: canonical `/v1/saves` plus the legacy `/saves`
+/// alias kept during the 0.4.1 transition.
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/saves")
-            .route("", web::post().to(create_save))
-            .route("/{player_id}", web::get().to(list_saves))
-            .route("/{player_id}/{save_id}", web::get().to(get_save))
-            .route("/{player_id}/{save_id}", web::delete().to(delete_save)),
-    );
+    cfg.service(scoped("/v1/saves")).service(scoped("/saves"));
+}
+
+/// Build the save routes under the given scope prefix so the canonical and
+/// legacy mounts share a single route definition.
+fn scoped(prefix: &str) -> Scope {
+    web::scope(prefix)
+        .route("", web::post().to(create_save))
+        .route("/{player_id}", web::get().to(list_saves))
+        .route("/{player_id}/{save_id}", web::get().to(get_save))
+        .route("/{player_id}/{save_id}", web::delete().to(delete_save))
 }
 
 /// Request body for creating a game save.
@@ -239,7 +248,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/saves/player-uuid-1")
+            .uri("/v1/saves/player-uuid-1")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -256,7 +265,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/saves/player-uuid-2")
+            .uri("/v1/saves/player-uuid-2")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -273,14 +282,14 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/saves/player-uuid-1")
+            .uri("/v1/saves/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // ── POST /saves ────────────────────────────────────────────────────────
+    // ── POST /v1/saves ────────────────────────────────────────────────────────
 
     #[actix_web::test]
     async fn create_save_requires_auth() {
@@ -291,7 +300,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/saves")
+            .uri("/v1/saves")
             .set_json(serde_json::json!({
                 "name": "slot-1",
                 "save": { "hp": 100 }
@@ -312,7 +321,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/saves")
+            .uri("/v1/saves")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({
                 "name": "slot-1",
@@ -335,7 +344,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/saves")
+            .uri("/v1/saves")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({
                 "name": "slot-1",
@@ -358,7 +367,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/saves")
+            .uri("/v1/saves")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({
                 "name": "slot-1",
@@ -379,7 +388,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/saves")
+            .uri("/v1/saves")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({
                 "name": "slot-1",
@@ -401,7 +410,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/saves")
+            .uri("/v1/saves")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({
                 "name": "",
@@ -428,7 +437,7 @@ mod tests {
         .await;
         let big = serde_json::json!({ "data": "x".repeat(saves_svc::MAX_SAVE_BYTES) });
         let req = test::TestRequest::post()
-            .uri("/saves")
+            .uri("/v1/saves")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({
                 "name": "slot-1",
@@ -439,7 +448,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // ── GET /saves/{player_id}/{save_id} ───────────────────────────────────
+    // ── GET /v1/saves/{player_id}/{save_id} ───────────────────────────────────
 
     #[actix_web::test]
     async fn get_save_requires_auth() {
@@ -450,7 +459,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/saves/player-uuid-1/save-uuid-1")
+            .uri("/v1/saves/player-uuid-1/save-uuid-1")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -467,7 +476,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/saves/player-uuid-2/save-uuid-1")
+            .uri("/v1/saves/player-uuid-2/save-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -484,14 +493,14 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/saves/player-uuid-1/save-uuid-1")
+            .uri("/v1/saves/player-uuid-1/save-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // ── DELETE /saves/{player_id}/{save_id} ────────────────────────────────
+    // ── DELETE /v1/saves/{player_id}/{save_id} ────────────────────────────────
 
     #[actix_web::test]
     async fn delete_save_requires_auth() {
@@ -502,7 +511,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::delete()
-            .uri("/saves/player-uuid-1/save-uuid-1")
+            .uri("/v1/saves/player-uuid-1/save-uuid-1")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -519,7 +528,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::delete()
-            .uri("/saves/player-uuid-2/save-uuid-1")
+            .uri("/v1/saves/player-uuid-2/save-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -536,10 +545,50 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::delete()
-            .uri("/saves/player-uuid-1/save-uuid-1")
+            .uri("/v1/saves/player-uuid-1/save-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── Legacy `/saves` alias mount (0.4.1 transition) ─────────────────────
+
+    /// The unprefixed alias must keep routing identically during transition.
+    #[actix_web::test]
+    async fn create_save_legacy_alias_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/saves")
+            .set_json(serde_json::json!({
+                "name": "slot-1",
+                "save": { "hp": 100 }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn list_saves_legacy_alias_cross_player_returns_403() {
+        // Ownership check runs before the pool check — no pool is registered.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/saves/player-uuid-2")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

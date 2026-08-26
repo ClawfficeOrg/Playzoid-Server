@@ -215,3 +215,19 @@ PHASE_BLOCKED: 0.3 review failed after 3 attempts. See /tmp/ralph-line-review-0.
 ## 2026-08-25 23:4x
 
 PHASE_COMPLETE: 0.3 merged to main; tagged v0.3.0. Release review performed manually (checklist 6/6 PASS) after RELEASE_REVIEW_AGENT was blocked by Copilot org policy.
+
+## 2026-08-26 — task/0.4.1 run log
+
+- Implemented `/v1` route-prefix parity: `auth`, `players`, `leaderboards`,
+  `saves` now mount canonical `/v1/<group>` scopes plus legacy unprefixed
+  aliases via a shared per-module `scoped(prefix)` builder (single route
+  definition, no drift). `main.rs` untouched (config signatures unchanged).
+- Unit tests: repointed to `/v1/*`, added legacy-alias routing tests per module.
+- Integration tests: all flows repointed to `/v1/*`; added one legacy-path
+  test per suite (auth register+login, players get, leaderboards submit-then-
+  read-across-mounts, saves create/list/delete roundtrip).
+- Doc-comment-only path refreshes in `src/services/auth.rs` and
+  `src/services/players.rs` (no other active-task owner; comment-only).
+- Known staleness: `docs/TALO_API.md` still describes pre-parity prefixes and
+  the Phase 0.2 decision note at its end. NOT edited here — file is owned by
+  tasks 0.4.2 / 0.4.13; recorded instead of edited to avoid cross-task edits.
