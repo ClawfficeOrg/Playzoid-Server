@@ -2,6 +2,11 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — WebSocket load test (task 0.3.15)
+
+### Added
+- `tests/ws_load.rs` — standalone integration load/throughput test for the in-process `ChannelHub` fan-out path: **100 concurrent subscriber connections, 1000 chat messages, 0 dropped or double-delivered envelopes**. Registers 100 live subscriber actors in one channel (cumulative 5050 `joined` fans), broadcasts 1000 chat messages (100k deliveries), then asserts the exact final event count. Placed in `tests/` per the task's owned paths and driven entirely through the public crate API (`ChannelHub`, `JoinChannel`, `ChannelMessage`, `ChannelNotification`).
+
 ## [Unreleased] — 2026-08-25 — WebSocket subaccount participant support (task 0.3.14)
 
 ### Changed
