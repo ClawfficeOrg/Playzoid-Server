@@ -46,7 +46,7 @@ full Talo API parity documented in `docs/TALO_API.md`.
   aliases during transition.
   Complexity: Medium. Owned paths: `src/api/`, `tests/`.
   Agent: mid_dev_agent
-- [ ] `0.4.2` Full domain-model structs: `PlayerAlias`, `PlayerAuth`,
+- [x] `0.4.2` Full domain-model structs: `PlayerAlias`, `PlayerAuth`,
   `GameChannel`, complete `LeaderboardEntry` (incl. upstream `props`).
   Complexity: Medium. Owned paths: `src/entities/`, `docs/TALO_API.md`.
   Agent: mid_dev_agent
