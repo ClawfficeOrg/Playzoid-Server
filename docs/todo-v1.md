@@ -58,11 +58,12 @@ full Talo API parity documented in `docs/TALO_API.md`.
   Complexity: Small. Owned paths: `migrations/`.
   Agent: basic_dev_agent
   <!-- 0.4.3 done note: migrations/20260826000001_create_game_settings.{up,down}.sql; reversibility verified locally with sqlx-cli against a throwaway mysql:8.0 schema (full up set applies, ours sorts last lexicographically; one revert drops exactly game_settings). CI sqlx-migrate job runs the same sequence but is NOT a gate: workflow is workflow_dispatch-only and the job is continue-on-error:true -->
-- [ ] `0.4.4` Implement `GET /v1/games/{game_id}/settings` and
+- [x] `0.4.4` Implement `GET /v1/games/{game_id}/settings` and
   `PUT .../settings` (auth-guarded, validated JSON ≤ size cap).
   Complexity: Medium. Owned paths: `src/api/game_settings.rs` (new),
   `src/services/game_settings.rs` (new), `src/entities/game_setting.rs` (new).
   Agent: mid_dev_agent
+  <!-- 0.4.4 done note: implemented 2026-08-26; canonical-only /v1/games scope (no legacy alias, post-0.4.1 route); JWT guard via AuthenticatedUser; pre-SQL validation (game_id 1..=64 chars, config non-null, ≤32KiB MAX_CONFIG_BYTES mirroring saves); parameterized upsert (ON DUPLICATE KEY UPDATE config) returning read-back GameSettingView, created_at preserved; read-back trims game_id symmetrically with PUT so GET addresses the exact row a PUT created; upstream has no per-game settings endpoint — documented Playzoid extension in memory.md incl. any-JWT-writes trade-off until games/scopes exist; unit tests same-file (15) + tests/game_settings_integration.rs (10, #[ignore], Docker stack — note: tests/ nominally 0.4.12's gap-fill owner, per-endpoint suite precedent from 0.3.x); cargo fmt/clippy/test green; commit + PR deferred per session instructions -->
 
 ### Analytics & feedback
 

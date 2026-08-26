@@ -4,6 +4,7 @@
 //! progress (see `docs/TALO_API.md`).
 
 pub mod game_channel;
+pub mod game_setting;
 pub mod leaderboard;
 pub mod player;
 pub mod player_alias;

@@ -280,3 +280,36 @@ DONE (implementation; no commit/PR per session instructions):
   and the job is `continue-on-error: true` — it is not an automated gate.
   Real table exercise deferred to 0.4.12 settings integration tests.
 - Gate: cargo fmt --check / clippy -D warnings / cargo test all green.
+
+## 2026-08-26 06:33
+
+DONE: 0.4.3 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.4 (game settings endpoints)
+
+DONE (implementation; no commit/PR per session instructions):
+- `src/entities/game_setting.rs` (new): `GameSettingRow` (FromRow, pub(crate),
+  internal BIGINT id never selected) + `GameSettingView` (camelCase
+  gameId/config/createdAt/updatedAt) + same-file tests.
+- `src/services/game_settings.rs` (new): `get_settings` / `put_settings`;
+  pre-SQL validation (trimmed game_id 1..=64 chars matching VARCHAR(64),
+  config non-null, serialized ≤ MAX_CONFIG_BYTES 32 KiB mirroring the saves
+  cap); parameterized upsert (`INSERT … ON DUPLICATE KEY UPDATE config = ?`,
+  value bound twice) + read-back; read-back trims game_id symmetrically with
+  PUT so GET addresses the exact row a PUT created; error enum
+  NotFound/Invalid/Database.
+- `src/api/game_settings.rs` (new): single canonical `/v1/games` scope,
+  GET+PUT on `/{game_id}/settings`. No legacy alias mount (route is new after
+  the 0.4.1 parity pass; `/v1/socket-tickets` precedent). Body wrapper
+  `{ "config": <any> }` rejects unknown top-level fields at deserialization;
+  auth via AuthenticatedUser (401 pre-body), pool-absent → 503.
+- Wired: `src/{api,services,entities}/mod.rs` (alphabetical), `main.rs`
+  configure after saves. Integration suite `tests/game_settings_integration.rs`
+  (10 tests, all #[ignore], Docker dev stack) — owned-path note: `tests/` is
+  nominally 0.4.12's gap-fill owner; each endpoint task has shipped its own
+  suite since 0.3.x, flagged here and in the todo done-note.
+- Docs: CHANGES.md entry, memory.md decision entry (extension-not-parity,
+  upsert semantics, 32 KiB cap choice, any-JWT-writes trade-off until
+  games/scopes land), todo-v1.md 0.4.4 marked done with note.
+- Gate: cargo fmt --check / clippy -D warnings / cargo test all green
+  (178 unit passed; new integration tests ignored as designed).
