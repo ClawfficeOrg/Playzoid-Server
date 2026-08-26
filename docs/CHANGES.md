@@ -2,6 +2,16 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — leaderboard + save endpoint test coverage (task 0.3.16)
+
+### Added
+- `src/entities/leaderboard.rs` — `#[cfg(test)] mod tests` mirroring the sibling `src/entities/save.rs`: `LeaderboardEntryView` serializes to camelCase `{playerId, score, rank}` and `LeaderboardResponse` wraps its `entries` array (previously the only endpoint entity with zero unit tests).
+- `tests/leaderboards_integration.rs` — 10 gap-fill tests: POST missing `score` → 400, POST oversized `props` → 400 (HTTP layer; service unit only before), POST with a never-registered JWT subject → 404 (`PlayerNotFound` path, previously only unknown *board* 404'd), PUT missing `score` → 400, PUT oversized `props` → 400, PUT unknown board → 404 (distinct from `EntryNotFound`), empty board → 200 `entries: []`, page beyond data → 200 `[]` (no clamp/500), non-numeric pagination → 400 (Query deser fail) and equal-score tie broken by earlier submission (rank 1 for the first seed).
+- `tests/saves_integration.rs` — 5 gap-fill tests: `"save": null` → 400 (NOT NULL guard, service unit only before), 256-char name → 400, exact 255-char name → 201 (upper-boundary pass), small save + oversized metadata → 400 (combined-size cap), and second `DELETE` of an already-deleted save → 404 (idempotency boundary).
+
+### Verified
+- `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test` all green (137 passed). Ignored integration suite run against the Docker dev stack: `tests/leaderboards_integration.rs` 26/26 passed, `tests/saves_integration.rs` 29/29 passed.
+
 ## [Unreleased] — 2026-08-25 — WebSocket load test (task 0.3.15)
 
 ### Added

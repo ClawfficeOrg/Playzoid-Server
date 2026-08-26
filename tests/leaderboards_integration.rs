@@ -624,3 +624,230 @@ async fn update_entry_keeps_props_when_omitted_and_replaces_when_supplied() {
         serde_json::json!([{"key": "level", "value": "9"}])
     );
 }
+
+// ── Gap-fill tests (task 0.3.16) ──────────────────────────────────────────────
+
+/// Mint an auth-bearing token for an arbitrary subject via the shared JWT
+/// secret — used to prove the unknown-player 404 path for leaderboard entries.
+fn token_for(cfg: &Config, player_public_id: &str) -> String {
+    playzoid_server::services::auth::issue_jwt(&cfg.jwt_secret, player_public_id, 3600)
+        .expect("issue token")
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_missing_score_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::post()
+        .uri("/leaderboards/some-board/entries")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "props": [] }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_rejects_oversized_props_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let big = serde_json::Value::Array(vec![serde_json::Value::String("x".into());
+        playzoid_server::services::leaderboards::MAX_PROPS_BYTES]);
+    let req = test::TestRequest::post()
+        .uri("/leaderboards/some-board/entries")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 100, "props": big }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_unknown_player_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    // A well-formed JWT for a subject never registered as a player.
+    let token = token_for(&cfg, &Uuid::new_v4().to_string());
+    let app = leaderboard_app!(pool, mgr, cfg);
+    let req = test::TestRequest::post()
+        .uri(&format!("/leaderboards/{board}/entries"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 100 }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn update_entry_missing_score_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::put()
+        .uri(&format!("/leaderboards/some-board/entries/{pid}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "props": [] }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn update_entry_rejects_oversized_props_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let big = serde_json::Value::Array(vec![serde_json::Value::String("x".into());
+        playzoid_server::services::leaderboards::MAX_PROPS_BYTES]);
+    let req = test::TestRequest::put()
+        .uri(&format!("/leaderboards/some-board/entries/{pid}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 200, "props": big }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn update_entry_unknown_board_returns_404() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (pid, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::put()
+        .uri(&format!(
+            "/leaderboards/definitely-not-a-board-xyz/entries/{pid}"
+        ))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 200 }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_leaderboard_empty_board_returns_empty_entries() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/leaderboards/{board}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["entries"].as_array().expect("entries array");
+    assert!(
+        entries.is_empty(),
+        "expected empty entries, got {entries:?}"
+    );
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_leaderboard_page_beyond_data_returns_empty_entries() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    for score in [10i64, 20, 30] {
+        let username = unique_username();
+        let (pid, _) = register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &username).await;
+        seed_entry(&pool, &board, &pid, score).await;
+    }
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/leaderboards/{board}?page=9&per_page=50"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["entries"].as_array().expect("entries array");
+    assert!(
+        entries.is_empty(),
+        "expected empty entries, got {entries:?}"
+    );
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_leaderboard_non_numeric_pagination_returns_400() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    for q in ["?page=abc", "?per_page=xyz", "?page=1&per_page="] {
+        let req = test::TestRequest::get()
+            .uri(&format!("/leaderboards/some-board{q}"))
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "query {q}");
+    }
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn get_leaderboard_ranks_tied_scores_by_earlier_submission() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    // Two players, equal scores; the first-seeded entry (lower auto-increment
+    // id / earlier created_at) must rank above the second.
+    let user_a = unique_username();
+    let user_b = unique_username();
+    let (pid_a, _) = register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &user_a).await;
+    let (pid_b, _) = register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &user_b).await;
+    seed_entry(&pool, &board, &pid_a, 100).await;
+    seed_entry(&pool, &board, &pid_b, 100).await;
+
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/leaderboards/{board}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["entries"].as_array().expect("entries array");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["playerId"], pid_a);
+    assert_eq!(entries[0]["rank"], 1);
+    assert_eq!(entries[1]["playerId"], pid_b);
+    assert_eq!(entries[1]["rank"], 2);
+}
