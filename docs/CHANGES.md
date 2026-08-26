@@ -2,6 +2,16 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — document leaderboard, save & WS shapes (task 0.3.17)
+
+### Changed
+- `docs/TALO_API.md` — the upstream-only leaderboards / game-saves / WebSocket sections are replaced with the **actually implemented** Phase 0.3 surfaces, cross-referenced to the source:
+  - Leaderboards: `GET /leaderboards/{game_id}` (pagination `page`/`per_page`, camelCase `LeaderboardEntryView`/`LeaderboardResponse`), `POST /leaderboards/{game_id}/entries` (201/400/401/404/409/503, props ≤ 4 KB), `PUT /leaderboards/{game_id}/entries/{player_id}` (same-body 200/403 path), with the `SubmitScoreRequest` struct.
+  - Game saves: `POST /saves`, `GET /saves/{player_id}`, `GET /saves/{player_id}/{save_id}`, `DELETE /saves/{player_id}/{save_id}` with the full camelCase `SaveView` and `CreateSaveRequest` structs, own-only 403 semantics, and a 32 KiB blob cap.
+  - WebSocket: `POST /v1/socket-tickets` → `?ticket=` on `GET /ws`, the request tokens (`v1.players.identify`, `v1.channels.join`/`leave`/`message`, `v1.heartbeat`) and server envelopes (`v1.error`, `v1.players.identify.success` with additive `parentAccountId`, `v1.players.presence.updated`, `v1.channels.player-joined`/`player-left`/`message`), error codes, and the subaccount grouping model.
+  - Canonical schema tables for `leaderboards`/`leaderboard_entries`/`game_saves` mirroring the existing `players` section.
+- The intro heading is retitled to "Playzoid-Server Implemented Endpoints (Phases 0.2 & 0.3)" and the "Remaining TODOs" list trimmed to genuinely-remaining upstream items (complex `PlayerAlias`/`PlayerAuth`/`GameChannel`/full `LeaderboardEntry` serde structs, `/v1`-prefix parity).
+
 ## [Unreleased] — 2026-08-25 — leaderboard + save endpoint test coverage (task 0.3.16)
 
 ### Added

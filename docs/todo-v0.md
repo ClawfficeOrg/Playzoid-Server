@@ -130,9 +130,10 @@ connections.
   Complexity: Medium. Owned paths: `tests/`.
   Agent: mid_dev_agent
   <!-- 0.3.16 done note: implemented 2026-08-25 on task/0.3.16; gap-fill audit — leaderboard/save suites already inline from 0.3.2–0.3.8, so added the missing boundary/error paths: POST+PUT missing-score 400 and oversized-props 400, POST unknown-player 404, PUT unknown-board 404, empty-board + page-beyond-data 200 [], non-numeric pagination 400, tie-break-by-earlier-submission ranking (10 new tests/leaderboards_integration.rs); save null-save 400, 255-char name upper boundary (201) + 256-char 400, oversized-metadata 400, delete-idempotency second 404 (5 new tests/saves_integration.rs); src/entities/leaderboard.rs gains a #[cfg(test)] mod (camelCase + response wrapper) mirroring entities/save.rs — owned-path note: entity file sits outside tests/ on the AGENTS.md same-file-unit-tests precedent; cargo fmt/clippy/test + full ignored integration suite vs Docker stack all green -->
-- [ ] `0.3.17` Update `docs/TALO_API.md` with leaderboard, save, WS shapes.
+- [x] `0.3.17` Update `docs/TALO_API.md` with leaderboard, save, WS shapes.
   Complexity: Small. Owned paths: `docs/TALO_API.md`.
   Agent: basic_dev_agent
+  <!-- 0.3.17 done note: docs-only; TALO_API.md sections for leaderboards, game saves, WS protocol rewritten from upstream-reference to implemented shapes cross-checked against src/api, src/entities, src/services, src/sockets + the two Phase 0.3 migrations; canonical schema tables added for leaderboards/leaderboard_entries/game_saves; Remaining TODOs trimmed -->
   <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
 
 ### Milestone review steps (Phase 0.3)
