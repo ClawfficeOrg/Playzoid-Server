@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use tracing::instrument;
 
+use crate::sockets::channels::{self, ChannelChange, JoinChannel, LeaveAllChannels, LeaveChannel};
 use crate::sockets::presence::{self, JoinPresence, LeavePresence};
 
 /// Monotonic counter paired with a timestamp so message ids stay unique
@@ -13,6 +14,22 @@ static MSG_SEQ: AtomicI64 = AtomicI64::new(0);
 
 /// Monotonic counter giving each connection a unique presence key.
 static CONN_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+/// The hub action a processed inbound frame wants the caller to perform.
+///
+/// The frame routing stays pure: no hub messages are sent from
+/// [`WsConn::process_text_frame`]; the caller performs the side effect once it
+/// has the connection's own address at hand.
+enum FrameOutcome {
+    /// No hub action; the frame produced only response envelopes (or nothing).
+    None,
+    /// The frame completed a successful identify; arm a presence join.
+    Identify,
+    /// The frame requested a channel join for the given channel.
+    JoinChannel { channel_id: i64 },
+    /// The frame requested a channel leave for the given channel.
+    LeaveChannel { channel_id: i64 },
+}
 
 /// Actor handling a single WebSocket connection.
 pub struct WsConn {
@@ -37,29 +54,30 @@ impl WsConn {
 
     /// Handle a `v1.players.identify` request against the ticketed alias id.
     ///
-    /// Returns the response envelope together with whether the client just
-    /// became identified, in which case the caller arms a presence join.
-    fn handle_players_identify(&mut self, data: &Value) -> (Value, bool) {
+    /// Returns the response envelope together with the frame outcome; a
+    /// successful identify yields [`FrameOutcome::Identify`], arming the
+    /// caller to register presence for this connection.
+    fn handle_players_identify(&mut self, data: &Value) -> (Value, FrameOutcome) {
         let Some(alias_id) = self.alias_id else {
             return (
                 error_payload(
                     "INVALID_INPUT",
                     "playerAliasId does not match authenticated ticket",
                 ),
-                false,
+                FrameOutcome::None,
             );
         };
         match data.get("playerAliasId").and_then(|v| v.as_i64()) {
             None => (
                 error_payload("INVALID_INPUT", "playerAliasId is required"),
-                false,
+                FrameOutcome::None,
             ),
             Some(id) if id != alias_id => (
                 error_payload(
                     "INVALID_INPUT",
                     "playerAliasId does not match authenticated ticket",
                 ),
-                false,
+                FrameOutcome::None,
             ),
             Some(id) => {
                 self.identified = true;
@@ -71,36 +89,85 @@ impl WsConn {
                             "playerId": format!("player-{}", id),
                         }
                     }),
-                    true,
+                    FrameOutcome::Identify,
                 )
             }
         }
     }
 
+    /// Handle a `v1.channels.join` request: validate the frame and report the
+    /// channel membership the caller should register for this connection.
+    fn handle_channels_join(&self, data: &Value) -> (Vec<Value>, FrameOutcome) {
+        if !self.identified {
+            return (
+                vec![error_payload(
+                    "INVALID_INPUT",
+                    "identify before joining a channel",
+                )],
+                FrameOutcome::None,
+            );
+        }
+        let Some(channel_id) = data.get("channelId").and_then(|v| v.as_i64()) else {
+            return (
+                vec![error_payload("INVALID_INPUT", "channelId is required")],
+                FrameOutcome::None,
+            );
+        };
+        (Vec::new(), FrameOutcome::JoinChannel { channel_id })
+    }
+
+    /// Handle a `v1.channels.leave` request; symmetric to
+    /// [`Self::handle_channels_join`].
+    fn handle_channels_leave(&self, data: &Value) -> (Vec<Value>, FrameOutcome) {
+        if !self.identified {
+            return (
+                vec![error_payload(
+                    "INVALID_INPUT",
+                    "identify before leaving a channel",
+                )],
+                FrameOutcome::None,
+            );
+        }
+        let Some(channel_id) = data.get("channelId").and_then(|v| v.as_i64()) else {
+            return (
+                vec![error_payload("INVALID_INPUT", "channelId is required")],
+                FrameOutcome::None,
+            );
+        };
+        (Vec::new(), FrameOutcome::LeaveChannel { channel_id })
+    }
+
     /// Process a single inbound text frame.
     ///
-    /// Returns the response envelopes to send back plus whether the frame
-    /// completed a successful identify (in which case a presence join should
-    /// be armed for this connection).
-    fn process_text_frame(&mut self, txt: &str) -> (Vec<Value>, bool) {
+    /// Returns the response envelopes to send back plus the frame outcome
+    /// describing the hub action the caller should perform for this
+    /// connection (e.g. arming a presence join on a successful identify).
+    fn process_text_frame(&mut self, txt: &str) -> (Vec<Value>, FrameOutcome) {
         let v: Value = match serde_json::from_str(txt) {
             Ok(v) => v,
-            Err(e) => return (vec![error_payload("INVALID_JSON", e.to_string())], false),
+            Err(e) => {
+                return (
+                    vec![error_payload("INVALID_JSON", e.to_string())],
+                    FrameOutcome::None,
+                );
+            }
         };
         let req = v.get("req").and_then(|r| r.as_str()).unwrap_or("");
         let data = v.get("data").cloned().unwrap_or(json!({}));
         match req {
             "v1.players.identify" => {
-                let (response, identified) = self.handle_players_identify(&data);
-                (vec![response], identified)
+                let (response, outcome) = self.handle_players_identify(&data);
+                (vec![response], outcome)
             }
-            "v1.channels.message" => (vec![handle_channels_message(&data)], false),
+            "v1.channels.message" => (vec![handle_channels_message(&data)], FrameOutcome::None),
+            "v1.channels.join" => self.handle_channels_join(&data),
+            "v1.channels.leave" => self.handle_channels_leave(&data),
             _ => (
                 vec![error_payload(
                     "UNHANDLED_REQUEST",
                     format!("Unknown req: {}", req),
                 )],
-                false,
+                FrameOutcome::None,
             ),
         }
     }
@@ -123,8 +190,9 @@ impl Actor for WsConn {
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
-        if let Some(leave) = self.leave_presence() {
-            presence::hub().do_send(leave);
+        if let Some(LeavePresence { alias_id, conn_key }) = self.leave_presence() {
+            presence::hub().do_send(LeavePresence { alias_id, conn_key });
+            channels::hub().do_send(LeaveAllChannels { alias_id, conn_key });
         }
         Running::Stop
     }
@@ -135,6 +203,19 @@ impl Handler<presence::PresenceChange> for WsConn {
 
     fn handle(&mut self, msg: presence::PresenceChange, ctx: &mut Self::Context) {
         write_payload(ctx, &presence::presence_payload(msg.alias_id, msg.online));
+    }
+}
+
+impl Handler<ChannelChange> for WsConn {
+    type Result = ();
+
+    fn handle(&mut self, msg: ChannelChange, ctx: &mut Self::Context) {
+        let payload = if msg.joined {
+            channels::player_joined_payload(msg.channel_id, msg.alias_id)
+        } else {
+            channels::player_left_payload(msg.channel_id, msg.alias_id)
+        };
+        write_payload(ctx, &payload);
     }
 }
 
@@ -190,19 +271,43 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                     ctx.text("v1.heartbeat");
                     return;
                 }
-                let (payloads, just_identified) = self.process_text_frame(&txt);
-                if just_identified {
-                    // Register presence with the ticketed alias (never the
-                    // client-supplied id) so this socket receives broadcast
-                    // `v1.players.presence.updated` envelopes and the alias
-                    // is announced online.
-                    if let Some(alias_id) = self.alias_id {
-                        presence::hub().do_send(JoinPresence {
-                            alias_id,
-                            conn_key: self.conn_key,
-                            recipient: ctx.address().recipient(),
-                        });
+                let (payloads, outcome) = self.process_text_frame(&txt);
+                match outcome {
+                    FrameOutcome::Identify => {
+                        // Register presence with the ticketed alias (never the
+                        // client-supplied id) so this socket receives broadcast
+                        // `v1.players.presence.updated` envelopes and the alias
+                        // is announced online.
+                        if let Some(alias_id) = self.alias_id {
+                            presence::hub().do_send(JoinPresence {
+                                alias_id,
+                                conn_key: self.conn_key,
+                                recipient: ctx.address().recipient(),
+                            });
+                        }
                     }
+                    FrameOutcome::JoinChannel { channel_id } => {
+                        // Register channel membership with the ticketed alias
+                        // and this connection's own address as recipient.
+                        if let Some(alias_id) = self.alias_id {
+                            channels::hub().do_send(JoinChannel {
+                                channel_id,
+                                alias_id,
+                                conn_key: self.conn_key,
+                                recipient: ctx.address().recipient(),
+                            });
+                        }
+                    }
+                    FrameOutcome::LeaveChannel { channel_id } => {
+                        if let Some(alias_id) = self.alias_id {
+                            channels::hub().do_send(LeaveChannel {
+                                channel_id,
+                                alias_id,
+                                conn_key: self.conn_key,
+                            });
+                        }
+                    }
+                    FrameOutcome::None => {}
                 }
                 for payload in payloads {
                     write_payload(ctx, &payload);
@@ -268,9 +373,9 @@ mod tests {
     #[test]
     fn identify_success_maps_alias_id() {
         let mut c = conn(Some(42));
-        let (payloads, just_identified) =
+        let (payloads, outcome) =
             c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
-        assert!(just_identified);
+        assert!(matches!(outcome, FrameOutcome::Identify));
         assert!(c.identified);
         assert_eq!(payloads.len(), 1);
         assert_eq!(payloads[0]["res"], "v1.players.identify.success");
@@ -281,22 +386,21 @@ mod tests {
     #[test]
     fn identify_error_paths_do_not_identify() {
         let mut c = conn(Some(1));
-        let (payloads, just_identified) =
+        let (payloads, outcome) =
             c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":2}}"#);
-        assert!(!just_identified);
+        assert!(matches!(outcome, FrameOutcome::None));
         assert!(!c.identified);
         assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
 
         let mut c = conn(Some(1));
-        let (_, just_identified) =
-            c.process_text_frame(r#"{"req":"v1.players.identify","data":{}}"#);
-        assert!(!just_identified);
+        let (_, outcome) = c.process_text_frame(r#"{"req":"v1.players.identify","data":{}}"#);
+        assert!(matches!(outcome, FrameOutcome::None));
         assert!(!c.identified);
 
         let mut c = conn(None);
-        let (_, just_identified) =
+        let (_, outcome) =
             c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#);
-        assert!(!just_identified);
+        assert!(matches!(outcome, FrameOutcome::None));
         assert!(!c.identified);
     }
 
@@ -330,9 +434,9 @@ mod tests {
         // The client may only claim its ticketed alias; the presence join is
         // keyed on the server-resolved alias id, never a body-supplied value.
         let mut c = conn(Some(7));
-        let (payloads, just_identified) =
+        let (payloads, outcome) =
             c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":7}}"#);
-        assert!(just_identified);
+        assert!(matches!(outcome, FrameOutcome::Identify));
         assert_eq!(payloads[0]["res"], "v1.players.identify.success");
 
         let leave = c.leave_presence().expect("identified conn must register");
@@ -345,9 +449,9 @@ mod tests {
         assert!(conn(Some(42)).leave_presence().is_none());
 
         let mut c = conn(Some(42));
-        let (_, just_identified) =
+        let (_, outcome) =
             c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
-        assert!(just_identified);
+        assert!(matches!(outcome, FrameOutcome::Identify));
         let leave = c.leave_presence().expect("identified conn must register");
         assert_eq!(leave.alias_id, 42);
         assert_eq!(leave.conn_key, c.conn_key);
@@ -401,6 +505,80 @@ mod tests {
             r#"{"req":"v1.channels.message","data":{"channelId":1,"message":"hi"}}"#,
         );
         assert_ne!(a[0]["data"]["message"]["id"], b[0]["data"]["message"]["id"]);
+    }
+
+    #[test]
+    fn join_success_yields_join_action() {
+        let mut c = conn(Some(42));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        let (payloads, outcome) =
+            c.process_text_frame(r#"{"req":"v1.channels.join","data":{"channelId":7}}"#);
+        assert!(
+            payloads.is_empty(),
+            "join success must send no response yet"
+        );
+        assert!(matches!(
+            outcome,
+            FrameOutcome::JoinChannel { channel_id: 7 }
+        ));
+    }
+
+    #[test]
+    fn join_missing_channel_id_errors() {
+        let mut c = conn(Some(42));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        let (payloads, outcome) = c.process_text_frame(r#"{"req":"v1.channels.join","data":{}}"#);
+        assert!(matches!(outcome, FrameOutcome::None));
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+    }
+
+    #[test]
+    fn join_before_identify_errors() {
+        let (payloads, outcome) = conn(Some(42))
+            .process_text_frame(r#"{"req":"v1.channels.join","data":{"channelId":7}}"#);
+        assert!(matches!(outcome, FrameOutcome::None));
+        assert_eq!(
+            payloads[0]["data"]["code"].as_str(),
+            Some("INVALID_INPUT"),
+            "a channel must not be joinable before identify"
+        );
+    }
+
+    #[test]
+    fn leave_success_yields_leave_action() {
+        let mut c = conn(Some(42));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        let (payloads, outcome) =
+            c.process_text_frame(r#"{"req":"v1.channels.leave","data":{"channelId":7}}"#);
+        assert!(
+            payloads.is_empty(),
+            "leave success must send no response yet"
+        );
+        assert!(matches!(
+            outcome,
+            FrameOutcome::LeaveChannel { channel_id: 7 }
+        ));
+    }
+
+    #[test]
+    fn leave_missing_channel_id_errors() {
+        let mut c = conn(Some(42));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        let (payloads, outcome) = c.process_text_frame(r#"{"req":"v1.channels.leave","data":{}}"#);
+        assert!(matches!(outcome, FrameOutcome::None));
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
+    }
+
+    #[test]
+    fn leave_before_identify_errors() {
+        let (payloads, outcome) = conn(Some(42))
+            .process_text_frame(r#"{"req":"v1.channels.leave","data":{"channelId":7}}"#);
+        assert!(matches!(outcome, FrameOutcome::None));
+        assert_eq!(
+            payloads[0]["data"]["code"].as_str(),
+            Some("INVALID_INPUT"),
+            "a channel must not be leavable before identify"
+        );
     }
 
     #[test]

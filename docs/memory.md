@@ -219,6 +219,50 @@ so a dropped socket is unregistered exactly once via `stopping()`.
 
 ---
 
+## 2026-08-25 — Socket channel join/leave: socket-driven extension over verified Talo response shapes (task 0.3.12)
+
+**Context:** Task 0.3.12 adds the `v1.channels.player-joined` /
+`v1.channels.player-left` broadcasts for WebSocket game-channel membership.
+Upstream Talo (verified from `TaloDev/backend` + `TaloDev/docs`) fan-outs these
+envelopes over sockets but has **no** `v1.channels.join` / `leave` request
+token — membership is driven over HTTP, and sockets only receive the fan-out.
+Playzoid v0 has no channel persistence or HTTP channel routes yet.
+
+**Options considered:**
+- Broker membership purely over the verified response side with no request
+  trigger — nobody could ever join a channel, making the feature dead code.
+- Add `v1.channels.join` / `v1.channels.leave` as documented Playzoid **request**
+  extensions (chosen) — the only in-scope trigger; response envelopes stay
+  Talo-verified, so clients that only consume broadcasts see identical shapes.
+- Pull HTTP channel management into this task — scope creep into future
+  tasks/owned paths.
+
+**Decision:** `v1.channels.join` / `v1.channels.leave` are Playzoid socket
+request extensions. Membership is tracked in a single-process in-memory
+`ChannelHub` (structural mirror of `PresenceHub`): `channel → alias → conn_key
+→ Recipient<ChannelChange>`, plus a reverse `conn_key → memberships` index so a
+disconnect leaves all its channels in O(its channels). Alias ids always come
+from the server-resolved socket ticket (never client-supplied). Joining an
+already-member alias is idempotent (SDK-doc "already in channel → nothing
+happens"). The joiner's own connection is included in the `player-joined`
+fan-out (mirrors presence-hub insert-then-broadcast); the departed connection is
+excluded from its own `player-left`. `meta.reason` is emitted as the numeric
+`GameChannelLeavingReason::DEFAULT` (`0`), per the upstream TS numeric enum —
+never a string. No `TEMPORARY_MEMBERSHIP` variant yet (belongs to subaccount /
+temp-membership work).
+
+**Consequences:**
+- Single-node only, same as presence; multi-instance needs a shared store
+  (tracked with the multi-node work).
+- `v1.channels.leave` is a socket-driven explicit leave; disconnect auto-leaves
+  all channels via `stopping()` → `LeaveAllChannels`.
+- This is a **documented deviation** from upstream (request side only); if a
+  reviewer rejects it the task is BLOCKED pending a human decision. Response
+  envelopes remain Talo-verified.
+- Chat broadcast (task 0.3.13) will route through this membership registry.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

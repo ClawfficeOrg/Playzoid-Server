@@ -2,6 +2,18 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-25 — WebSocket channel join/leave message types (task 0.3.12)
+
+### Added
+- `src/sockets/channels.rs` — new in-memory `ChannelHub` actix actor with `JoinChannel` / `LeaveChannel` / `LeaveAllChannels` / `ChannelChange` messages plus the `player_joined_payload` and `player_left_payload` envelope builders. A player joins a channel when its first connection registers and leaves when its last connection drops; both transitions fan out the Talo-shaped `v1.channels.player-joined` (`channel.id`, `playerAlias.id`) and `v1.channels.player-left` (`+ meta.reason` numeric 0) envelopes to member sockets. Joining an already-member alias is idempotent (no re-broadcast) and the departed connection never receives its own leave. Membership is keyed `channel → alias → conn_key`, with a reverse `conn_key → memberships` index so `LeaveAllChannels` (issued on disconnect) is O(a connection's channels), plus a per-membership cap (256 conns) pruning dead recipients. Alias ids only come from the server-resolved socket ticket — client claims are rejected. Process-global `hub()` accessor needs no `main.rs` wiring.
+- `src/sockets/ws.rs` — `process_text_frame` now returns a pure `FrameOutcome` enum (`None` / `Identify` / `JoinChannel` / `LeaveChannel`) instead of a boolean, describing the *intended* hub action so the hot frame loop stays side-effect-free. New `v1.channels.join` / `v1.channels.leave` request tokens: gated on having identified first, `channelId` required (else `INVALID_INPUT`), and dispatched to the channel hub with the ticketed alias. `WsConn` implements `Handler<ChannelChange>` rendering the verified envelopes; `stopping()` additionally sends `LeaveAllChannels` beside the existing `LeavePresence`, so a dropped connection auto-leaves every channel it joined.
+- Hub unit tests: first-join broadcast incl. joiner, alias-level join idempotency (second conn silent but still subscribed), multi-alias join fan-out, leave-only-on-last-conn broadcast to survivors, surviving-conn leave no-op, non-member leave no-op, disconnect leaves all channels, payload shapes (incl. numeric leave reason), plus a load test (100 conns, 1000 membership broadcasts, 0 dropped/double-delivered envelopes). `ws.rs` unit tests: join/leave success outcomes, missing `channelId` errors, pre-identify errors; existing identify tests updated to the `FrameOutcome` return.
+
+### Note
+- `v1.channels.join` / `v1.channels.leave` **request** tokens are a Playzoid extension — upstream Talo drives channel membership over HTTP and only fans the membership changes out over sockets. The response envelopes stay 100% Talo-verified. Recorded as a `docs/memory.md` decision.
+
+---
+
 ## [Unreleased] — 2026-08-25 — WebSocket presence broadcast (task 0.3.11)
 
 ### Added
