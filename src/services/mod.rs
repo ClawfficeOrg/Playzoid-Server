@@ -7,3 +7,4 @@ pub mod auth;
 pub mod cache;
 pub mod leaderboards;
 pub mod players;
+pub mod saves;
