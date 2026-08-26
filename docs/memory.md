@@ -398,6 +398,52 @@ call per module plus the alias tests need deleting.
 
 ---
 
+## 2026-08-26 — Upstream domain-model struct lift (task 0.4.2)
+
+**Context:** task 0.4.2 asks for full serde structs for `PlayerAlias`,
+`PlayerAuth`, `GameChannel`, and the complete `LeaderboardEntry` (incl.
+upstream `props`). `docs/TALO_API_STRUCTS.md` only catalogues request bodies,
+so the domain shapes were re-verified against the live upstream docs:
+docs.trytalo.com `/docs/sockets/responses` (canonical types: `Prop`,
+`Player`, `PlayerAlias`, `GameChannel`, `GameChannelLeavingReason`),
+`/docs/http/leaderboard-api` (entry samples: float score, 0-based
+`position`, nested alias *without* timestamps), and
+`/docs/http/game-channel-api` (`owner: null` for system channels,
+`autoCleanup` / `private` flags, alias payloads *with* timestamps).
+
+**Decisions:**
+- New modules under `src/entities/`: `prop.rs` (shared key/value pair),
+  `player_auth.rs`, `player_alias.rs` (with nested `PlayerRef`),
+  `game_channel.rs`; `leaderboard.rs` gains `LeaderboardSortMode` plus a full
+  upstream-parity `LeaderboardEntry` **alongside** — never replacing — our
+  implemented `LeaderboardEntryView`, so wire compatibility is untouched.
+- `GameChannel.owner` uses the full `Option<PlayerAlias>` rather than a
+  summary struct: live samples show owner is a complete alias and there is
+  no recursion cycle (alias → player → auth), so full parity costs nothing.
+- Alias-level timestamps are `Option<DateTime<Utc>>`: channel payloads carry
+  them but leaderboard-entry samples omit them; liberal acceptance keeps
+  both real fixtures deserializable.
+- `LeaderboardEntry.score` is `f64` (upstream samples are floats, e.g.
+  `593.21`) while our persisted schema stays `BIGINT i64`; conversion
+  belongs to the future service layer. `position: u64` mirrors upstream's
+  0-based index; our views keep their 1-based `rank`.
+- `GameChannelLeavingReason` gets hand-written integer serde: serde variant
+  `rename` would emit JSON strings (`"0"`), upstream emits bare integers.
+  Matches the manual-decode precedent set by `PlayerStatus`.
+- Upstream's circular `Player.aliases` back-reference is omitted;
+  `Player.groups` is not modelled until player-group persistence exists.
+
+**Consequences:**
+- Purely additive data structs; no handler/service/socket changes, so every
+  existing response shape stays byte-compatible.
+- Security invariant pinned in unit tests: neither `PlayerAuth` nor
+  `PlayerAlias` can serialize credential material (`password_hash` remains
+  on the internal `players` row only).
+- When channel/analytics endpoints land later in 0.4, these structs are the
+  ready-made parity targets instead of new ad-hoc shapes.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
