@@ -89,7 +89,7 @@ connections.
   Complexity: Small. Owned paths: `migrations/`.
   Agent: basic_dev_agent
   <!-- 0.3.5 done note: migrations/20260825000002_create_game_saves.{up,down}.sql; verified up/down against dev stack -->
-- [ ] `0.3.6` Implement `GET /saves/{player_id}` — list saves.
+- [x] `0.3.6` Implement `GET /saves/{player_id}` — list saves.
   Complexity: Small. Owned paths: `src/api/saves.rs` (new),
   `src/services/saves.rs` (new), `src/entities/save.rs` (new).
   Agent: basic_dev_agent
