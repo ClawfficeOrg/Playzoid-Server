@@ -253,13 +253,61 @@ temp-membership work).
 
 **Consequences:**
 - Single-node only, same as presence; multi-instance needs a shared store
-  (tracked with the multi-node work).
-- `v1.channels.leave` is a socket-driven explicit leave; disconnect auto-leaves
-  all channels via `stopping()` → `LeaveAllChannels`.
-- This is a **documented deviation** from upstream (request side only); if a
-  reviewer rejects it the task is BLOCKED pending a human decision. Response
-  envelopes remain Talo-verified.
-- Chat broadcast (task 0.3.13) will route through this membership registry.
+      (tracked with the multi-node work).
+    - `v1.channels.leave` is a socket-driven explicit leave; disconnect auto-leaves
+      all channels via `stopping()` → `LeaveAllChannels`.
+    - This is a **documented deviation** from upstream (request side only); if a
+      reviewer rejects it the task is BLOCKED pending a human decision. Response
+      envelopes remain Talo-verified.
+    - Chat broadcast (task 0.3.13) will route through this membership registry.
+
+---
+
+## 2026-08-25 — Socket chat broadcast: joint-notification registry + Talo-parity envelope (task 0.3.13)
+
+**Context:** Task 0.3.13 adds the `v1.channels.message` fan-out. Upstream Talo
+(verified from
+`TaloDev/backend/src/socket/listeners/gameChannelListeners.ts`) accepts
+`{ channel: { id }, message: string }` and fans
+`{ res: "v1.channels.message", data: { channel, message: <string>, playerAlias } }`
+out to **every member socket, sender included**; a sender who is not a member
+is rejected ("Player not in channel").
+
+**Options considered:**
+- Keep the 0.3.10-era echo shape (`data.message = { id, from: "server", message }`)
+  and just broadcast that — preserves the earlier doc but diverges from the
+  verified Talo fan-out (plain-string message + sender `playerAlias`).
+- Register a second recipient per connection for chat alone — duplicates
+  bookkeeping and doubles the fan-out registry.
+- Re-type the single registry to a joint notification enum (chosen) — one
+  `Recipient<ChannelNotification>` (`Change | Message`) per connection carries
+  both membership changes and chat messages through the same fan-out paths.
+- Reject non-member sends with Talo's "Player not in channel" envelope — needs
+  a sender-reachable error channel that v0 sockets lack; instead a non-member
+  send is a silent no-op (mirrors the existing non-member leave no-op).
+
+**Decision:** `v1.channels.message` is a Playzoid **request** extension
+(`channelId` field, same as the 0.3.12 join/leave extension; upstream nests
+`channel.id`), while the response envelope stays Talo-verified. The channel
+hub's membership registry stores `Recipient<ChannelNotification>` once per
+connection; join/leave and chat messages fan out through that single registry.
+The broadcast envelope is
+`{ res, data: { channel: { id }, message: <string>, playerAlias: { id } } }` —
+message is a plain string, the sender identity is always the server-resolved
+socket-ticket alias (never a client-supplied `playerAliasId`), and the sender's
+own connection receives its message (Talo parity). Inbound messages are
+validated at the ws layer: identify-gated, integer `channelId`, non-empty
+`message`, capped at `MAX_CHAT_MESSAGE_CHARS` (1000 chars). Sending as a
+non-member, or into an unknown/empty channel, is a silent no-op for v0.
+
+**Consequences:**
+- The 0.3.10-documented counterpart-gated echo (`{ id, from: "server", message }`,
+  timestamp+counter message ids) is dropped; envelopes changed. Recorded in
+  `CHANGES.md`.
+- Non-member sends produce no error to the sender (v0 trade-off); revisit when
+  a socket error channel exists.
+- Single-node only, same as presence / 0.3.12; multi-instance chat needs a
+  shared store (tracked with the multi-node work).
 
 ---
 

@@ -2,15 +2,14 @@ use actix::prelude::*;
 use actix_web::{Error, HttpRequest, HttpResponse, web};
 use actix_web_actors::ws;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::instrument;
 
-use crate::sockets::channels::{self, ChannelChange, JoinChannel, LeaveAllChannels, LeaveChannel};
+use crate::sockets::channels::{
+    self, ChannelMessage, ChannelNotification, JoinChannel, LeaveAllChannels, LeaveChannel,
+    MAX_CHAT_MESSAGE_CHARS,
+};
 use crate::sockets::presence::{self, JoinPresence, LeavePresence};
-
-/// Monotonic counter paired with a timestamp so message ids stay unique
-/// even when several messages are routed within the same second.
-static MSG_SEQ: AtomicI64 = AtomicI64::new(0);
 
 /// Monotonic counter giving each connection a unique presence key.
 static CONN_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -29,6 +28,8 @@ enum FrameOutcome {
     JoinChannel { channel_id: i64 },
     /// The frame requested a channel leave for the given channel.
     LeaveChannel { channel_id: i64 },
+    /// The frame requested a chat message for the given channel; broadcast it.
+    BroadcastMessage(ChannelMessage),
 }
 
 /// Actor handling a single WebSocket connection.
@@ -137,6 +138,64 @@ impl WsConn {
         (Vec::new(), FrameOutcome::LeaveChannel { channel_id })
     }
 
+    /// Handle a `v1.channels.message` request: validate the frame and arm a
+    /// chat broadcast for the channel. The sender alias is always the
+    /// server-resolved socket-ticket alias — a client-supplied
+    /// `playerAliasId` claim is ignored. The actual fan-out happens in the
+    /// hub, gated on the sender being a member of the channel.
+    fn handle_channels_message(&self, data: &Value) -> (Vec<Value>, FrameOutcome) {
+        if !self.identified {
+            return (
+                vec![error_payload(
+                    "INVALID_INPUT",
+                    "identify before sending a channel message",
+                )],
+                FrameOutcome::None,
+            );
+        }
+        let Some(channel_id) = data.get("channelId").and_then(|v| v.as_i64()) else {
+            return (
+                vec![error_payload("INVALID_INPUT", "channelId is required")],
+                FrameOutcome::None,
+            );
+        };
+        let Some(message) = data.get("message").and_then(|v| v.as_str()) else {
+            return (
+                vec![error_payload("INVALID_INPUT", "message is required")],
+                FrameOutcome::None,
+            );
+        };
+        if message.is_empty() {
+            return (
+                vec![error_payload("INVALID_INPUT", "message is required")],
+                FrameOutcome::None,
+            );
+        }
+        if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
+            return (
+                vec![error_payload("INVALID_INPUT", "message is too long")],
+                FrameOutcome::None,
+            );
+        }
+        let Some(alias_id) = self.alias_id else {
+            return (
+                vec![error_payload(
+                    "INVALID_INPUT",
+                    "playerAliasId does not match authenticated ticket",
+                )],
+                FrameOutcome::None,
+            );
+        };
+        (
+            Vec::new(),
+            FrameOutcome::BroadcastMessage(ChannelMessage {
+                channel_id,
+                alias_id,
+                message: message.to_string(),
+            }),
+        )
+    }
+
     /// Process a single inbound text frame.
     ///
     /// Returns the response envelopes to send back plus the frame outcome
@@ -159,7 +218,7 @@ impl WsConn {
                 let (response, outcome) = self.handle_players_identify(&data);
                 (vec![response], outcome)
             }
-            "v1.channels.message" => (vec![handle_channels_message(&data)], FrameOutcome::None),
+            "v1.channels.message" => self.handle_channels_message(&data),
             "v1.channels.join" => self.handle_channels_join(&data),
             "v1.channels.leave" => self.handle_channels_leave(&data),
             _ => (
@@ -206,14 +265,23 @@ impl Handler<presence::PresenceChange> for WsConn {
     }
 }
 
-impl Handler<ChannelChange> for WsConn {
+impl Handler<ChannelNotification> for WsConn {
     type Result = ();
 
-    fn handle(&mut self, msg: ChannelChange, ctx: &mut Self::Context) {
-        let payload = if msg.joined {
-            channels::player_joined_payload(msg.channel_id, msg.alias_id)
-        } else {
-            channels::player_left_payload(msg.channel_id, msg.alias_id)
+    fn handle(&mut self, msg: ChannelNotification, ctx: &mut Self::Context) {
+        let payload = match msg {
+            ChannelNotification::Change(change) => {
+                if change.joined {
+                    channels::player_joined_payload(change.channel_id, change.alias_id)
+                } else {
+                    channels::player_left_payload(change.channel_id, change.alias_id)
+                }
+            }
+            ChannelNotification::Message(message) => channels::channel_message_payload(
+                message.channel_id,
+                message.alias_id,
+                &message.message,
+            ),
         };
         write_payload(ctx, &payload);
     }
@@ -232,34 +300,6 @@ fn write_payload(ctx: &mut ws::WebsocketContext<WsConn>, payload: &Value) {
     if let Ok(s) = serde_json::to_string(payload) {
         ctx.text(s);
     }
-}
-
-/// Handle a `v1.channels.message` request; echoes the message into the channel.
-fn handle_channels_message(data: &Value) -> Value {
-    let channel_id = match data.get("channelId").and_then(|v| v.as_i64()) {
-        Some(id) => id,
-        None => return error_payload("INVALID_INPUT", "channelId is required"),
-    };
-    let message = match data.get("message").and_then(|v| v.as_str()) {
-        Some(m) if !m.is_empty() => m,
-        _ => return error_payload("INVALID_INPUT", "message is required"),
-    };
-    let id = format!(
-        "msg-{}-{}",
-        chrono::Utc::now().timestamp(),
-        MSG_SEQ.fetch_add(1, Ordering::Relaxed)
-    );
-    json!({
-        "res": "v1.channels.message",
-        "data": {
-            "channel": { "id": channel_id },
-            "message": {
-                "id": id,
-                "from": "server",
-                "message": message,
-            }
-        }
-    })
 }
 
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
@@ -288,13 +328,15 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                     }
                     FrameOutcome::JoinChannel { channel_id } => {
                         // Register channel membership with the ticketed alias
-                        // and this connection's own address as recipient.
+                        // and this connection's own address as recipient, so it
+                        // receives both membership-change and chat-message
+                        // notifications for the channel.
                         if let Some(alias_id) = self.alias_id {
                             channels::hub().do_send(JoinChannel {
                                 channel_id,
                                 alias_id,
                                 conn_key: self.conn_key,
-                                recipient: ctx.address().recipient(),
+                                recipient: ctx.address().recipient::<ChannelNotification>(),
                             });
                         }
                     }
@@ -306,6 +348,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
                                 conn_key: self.conn_key,
                             });
                         }
+                    }
+                    FrameOutcome::BroadcastMessage(message) => {
+                        // The hub fans the message out to every member of the
+                        // channel (sender included); the sender alias is the
+                        // ticketed one stamped by process_text_frame.
+                        channels::hub().do_send(message);
                     }
                     FrameOutcome::None => {}
                 }
@@ -458,53 +506,97 @@ mod tests {
     }
 
     #[test]
-    fn channels_message_success() {
-        let payloads = frames(
-            Some(3),
+    fn channels_message_broadcast_outcome() {
+        // An identified member's message arms a hub broadcast; the sender
+        // alias comes from the socket ticket, never a body claim.
+        let mut c = conn(Some(42));
+        let (_, outcome) =
+            c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":42}}"#);
+        assert!(matches!(outcome, FrameOutcome::Identify));
+        let (payloads, outcome) = c.process_text_frame(
+            r#"{"req":"v1.channels.message","data":{"channelId":7,"message":"hi","playerAliasId":999}}"#,
+        );
+        assert!(
+            payloads.is_empty(),
+            "a message send must produce no local echo; the hub broadcasts it"
+        );
+        match outcome {
+            FrameOutcome::BroadcastMessage(message) => {
+                assert_eq!(message.channel_id, 7);
+                assert_eq!(message.message, "hi");
+                assert_eq!(
+                    message.alias_id, 42,
+                    "sender alias must be the ticketed alias, never the spoofed body claim"
+                );
+            }
+            _ => panic!("expected BroadcastMessage outcome"),
+        }
+    }
+
+    #[test]
+    fn channels_message_before_identify_errors() {
+        let (payloads, outcome) = conn(Some(42)).process_text_frame(
             r#"{"req":"v1.channels.message","data":{"channelId":7,"message":"hi"}}"#,
         );
-        assert_eq!(payloads[0]["res"], "v1.channels.message");
-        assert_eq!(payloads[0]["data"]["channel"]["id"].as_i64(), Some(7));
-        assert_eq!(
-            payloads[0]["data"]["message"]["message"].as_str(),
-            Some("hi")
+        assert!(
+            matches!(outcome, FrameOutcome::None),
+            "a message must not be broadcast before identify"
         );
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
     fn channels_message_missing_channel_id_errors() {
-        let payloads = frames(
-            Some(1),
-            r#"{"req":"v1.channels.message","data":{"message":"hi"}}"#,
-        );
+        let mut c = conn(Some(1));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#);
+        let (payloads, outcome) =
+            c.process_text_frame(r#"{"req":"v1.channels.message","data":{"message":"hi"}}"#);
+        assert!(matches!(outcome, FrameOutcome::None));
         assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
     fn channels_message_missing_or_empty_message_errors() {
-        let payloads = frames(
-            Some(1),
-            r#"{"req":"v1.channels.message","data":{"channelId":1}}"#,
-        );
+        let mut c = conn(Some(1));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#);
+        let (payloads, outcome) =
+            c.process_text_frame(r#"{"req":"v1.channels.message","data":{"channelId":1}}"#);
+        assert!(matches!(outcome, FrameOutcome::None));
         assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
-        let payloads = frames(
-            Some(1),
+
+        let mut c = conn(Some(1));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#);
+        let (payloads, outcome) = c.process_text_frame(
             r#"{"req":"v1.channels.message","data":{"channelId":1,"message":""}}"#,
         );
+        assert!(matches!(outcome, FrameOutcome::None));
         assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
-    fn message_ids_unique_within_same_second() {
-        let a = frames(
-            Some(1),
-            r#"{"req":"v1.channels.message","data":{"channelId":1,"message":"hi"}}"#,
+    fn channels_message_at_max_length_ok_oversize_errors() {
+        let max_ok = "x".repeat(MAX_CHAT_MESSAGE_CHARS);
+        let frame = format!(
+            r#"{{"req":"v1.channels.message","data":{{"channelId":1,"message":"{max_ok}"}}}}"#
         );
-        let b = frames(
-            Some(1),
-            r#"{"req":"v1.channels.message","data":{"channelId":1,"message":"hi"}}"#,
+        let mut c = conn(Some(1));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#);
+        let (payloads, outcome) = c.process_text_frame(&frame);
+        assert!(
+            payloads.is_empty(),
+            "a message at the character cap must be accepted"
         );
-        assert_ne!(a[0]["data"]["message"]["id"], b[0]["data"]["message"]["id"]);
+        assert!(matches!(outcome, FrameOutcome::BroadcastMessage(_)));
+
+        let too_long = "x".repeat(MAX_CHAT_MESSAGE_CHARS + 1);
+        let frame = format!(
+            r#"{{"req":"v1.channels.message","data":{{"channelId":1,"message":"{too_long}"}}}}"#
+        );
+        let mut c = conn(Some(1));
+        c.process_text_frame(r#"{"req":"v1.players.identify","data":{"playerAliasId":1}}"#);
+        let (payloads, outcome) = c.process_text_frame(&frame);
+        assert!(matches!(outcome, FrameOutcome::None));
+        assert_eq!(payloads[0]["data"]["code"].as_str(), Some("INVALID_INPUT"));
     }
 
     #[test]
