@@ -2,7 +2,19 @@
 
 # CHANGES.md
 
-## [Unreleased] — 2026-08-25 — WebSocket channel join/leave message types (task 0.3.12)
+## [Unreleased] — 2026-08-25 — WebSocket chat message broadcast (task 0.3.13)
+
+### Changed
+- `src/sockets/channels.rs` — the channel hub now broadcasts chat too. A new `ChannelMessage` message (`channel_id`, ticketed sender `alias_id`, text) fans out the Talo-shaped `v1.channels.message` envelope (`channel.id`, plain-string `message`, sender `playerAlias.id`) to **every member connection, sender included** — the 0.3.10 echo shape (`{ id, from: "server", message:{…} }` with timestamp+counter message ids) is dropped in favor of the verified upstream fan-out. Membership recipients were re-typed to a single joint notification enum `ChannelNotification` (`Change(ChannelChange)` | `Message(ChannelMessage)`), so one `Recipient` per connection carries both join/leave and chat fan-outs from the same registry. The hub prunes dead recipients per broadcast, and only members may broadcast: a non-member's send — or one into an unknown/empty channel — is a silent no-op (v0 trade-off over Talo's "Player not in channel" rejection). New `channel_message_payload` envelope builder and `MAX_CHAT_MESSAGE_CHARS` (1000) cap.
+- `src/sockets/ws.rs` — the routed `v1.channels.message` request is now `&self` `handle_channels_message`, gated on having identified, validating integer `channelId`, non-empty `message` ≤1000 chars; the sender alias is stamped from the socket ticket (never a body `playerAliasId` claim). `FrameOutcome` gains `BroadcastMessage(ChannelMessage)` and the stream loop dispatches it straight to the hub. `WsConn` implements `Handler<ChannelNotification>` (instead of `Handler<ChannelChange>`) rendering either envelope. `MSG_SEQ` (message-id counter) removed.
+
+### Added
+- Hub unit tests: message fans out to all members incl. sender, per-conn single delivery (one envelope per conn key), unknown-channel no-op, non-member send no-op, `channel_message_payload` shape, plus a chat load test (100 conns, 1000 chat broadcasts → 0 dropped/double-delivered envelopes). `ws.rs` unit tests: broadcast outcome with ticketed (spoof-proof) sender alias, pre-identify error, missing `channelId`/`message` errors, length cap boundary (cap-long accepted, cap+1 rejected); the same-second message-id uniqueness test is removed with the echo shape.
+
+### Note
+- `v1.channels.message` is a Playzoid **request** extension (`channelId` field, like the 0.3.12 join/leave); the response envelope is the verified Talo fan-out shape. Recorded as a `docs/memory.md` decision.
+
+---
 
 ### Added
 - `src/sockets/channels.rs` — new in-memory `ChannelHub` actix actor with `JoinChannel` / `LeaveChannel` / `LeaveAllChannels` / `ChannelChange` messages plus the `player_joined_payload` and `player_left_payload` envelope builders. A player joins a channel when its first connection registers and leaves when its last connection drops; both transitions fan out the Talo-shaped `v1.channels.player-joined` (`channel.id`, `playerAlias.id`) and `v1.channels.player-left` (`+ meta.reason` numeric 0) envelopes to member sockets. Joining an already-member alias is idempotent (no re-broadcast) and the departed connection never receives its own leave. Membership is keyed `channel → alias → conn_key`, with a reverse `conn_key → memberships` index so `LeaveAllChannels` (issued on disconnect) is O(a connection's channels), plus a per-membership cap (256 conns) pruning dead recipients. Alias ids only come from the server-resolved socket ticket — client claims are rejected. Process-global `hub()` accessor needs no `main.rs` wiring.
