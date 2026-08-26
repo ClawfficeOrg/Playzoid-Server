@@ -4,6 +4,22 @@ Per-task learnings: what worked, what bit, what to do differently.
 One `## X.Y.Z — Title` section per task, newest first. Keep entries short —
 bullets over prose. Read the last few sections before starting a similar task.
 
+## 0.3.12 — WS channel join/leave
+
+- Upstream Talo has no `v1.channels.join`/`leave` request token — membership is
+  HTTP-driven and sockets only get the `player-joined`/`player-left` fan-out.
+  Mirroring the response side exactly and adding socket requests as a
+  documented extension beats inventing an envelope shape. Keep the deviation
+  visible in memory.md + PR body for the reviewer.
+- A `join` with multiple connections per alias is a pure registry add — no
+  broadcast. Only the alias's *first* conn (join) and *last* conn (leave) are
+  transitions. Cost the same refcount discipline as presence.
+- Keep a reverse `conn_key → memberships` index or `LeaveAllChannels` on
+  disconnect is O(all channels); with it, it's O(that conn's channels).
+- Fan-out ordering matters: remove the departed conn's recipient *before*
+  broadcasting `player-left`, or the leaver receives its own obituary.
+- `meta.reason` is a TS numeric enum — serialize as JSON number, not string.
+
 ## 0.3.11 — WS presence broadcast
 
 - actix `Recipient` mailboxes give no ack — test hub broadcasts by polling an
