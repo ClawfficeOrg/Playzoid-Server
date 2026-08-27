@@ -674,6 +674,49 @@ marks task 0.4.8 owned paths `src/middleware/` + `src/config.rs`.
 
 ---
 
+## 2026-08-27 — Production hardening batch: global metrics, route-table OpenAPI, gated audit (tasks 0.4.9-0.4.13)
+
+**Context:** closing Phase 0.4 with observability, an OpenAPI spec, gated
+security scanning, live-stack rate-limit tests, and API docs. Three real
+decisions worth recording.
+
+**Decisions:**
+- **Prometheus via a process-global `LazyLock<Metrics>` registry + middleware:**
+  `MetricsMiddleware` wraps the app outermost (measures the whole pipeline
+  including 429s) and records method+status counters and a latency histogram;
+  the `/metrics` handler renders the registry plus live pool gauges sampled at
+  scrape time (no static DB collectors — correct even when a pool appears after
+  boot). WS connections move a gauge in `WsConn::started`/`stopping`. The
+  `/metrics` route skips recording itself. Rejected: per-request registry
+  instances (labels leak), and `actix-web-prom` (extra dep; manual is ~same
+  code).
+- **OpenAPI generated from a single route table, validated end-to-end in CI:**
+  one `ROUTES` const array (method, path, tag, summary, security, body, success
+  code) drives `utoipa` builders into an OpenAPI 3.0 document served at
+  `/openapi.json`. A unit test asserts every table row exists in the doc, and a
+  CI job boots the real server (degraded mode) and validates the served JSON.
+  Rejected: `#[utoipa::path]` on every handler (blast radius + schema churn for
+  ~22 handlers); the table gives one place to update and honest drift
+  detection. Socket-tickets documented as un-authenticated (matches the
+  handler).
+- **`cargo audit` gates CI with a justified ignore list:** `validator` 0.18→0.20
+  clears RUSTSEC-2024-0421 (`idna` 0.5). Two advisories cannot be fixed in
+  place — `h2` (actix-http 3.x pins h2 ^0.3, no 0.3.x fix; needs actix-web 5)
+  and `rsa` (no upstream fix; only reachable via sqlx-mysql password auth,
+  mitigated by TLS to MySQL) — so they are ignored in `.cargo/audit.toml` with
+  a mandatory rationale, not silently. Warnings (spin yanked, anyhow /
+  event-listener unsound) are non-gating by default.
+
+**Consequences:**
+- New public routes must be added to the OpenAPI `ROUTES` table or CI fails —
+  the spec cannot silently drift.
+- Adding a route to `RATE_LIMIT_PUBLIC_PREFIXES` does not change `/metrics` or
+  `/openapi.json` exposure (neither is a configured prefix).
+- The h2 advisory will keep failing `cargo audit` if the ignore is ever removed
+  without an actix-web 5 migration — tracked as a follow-up.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
