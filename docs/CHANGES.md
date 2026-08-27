@@ -2,6 +2,18 @@
 
 # CHANGES.md
 
+## [Unreleased] — 2026-08-27 — metrics, OpenAPI, audit gating, tests, API docs (tasks 0.4.9-0.4.13)
+
+### Added
+- `GET /metrics` (task 0.4.9) — Prometheus text exposition: per-request counters/histograms by method+status (`playzoid_http_requests_total`, `playzoid_http_request_duration_seconds`), a WebSocket connection gauge (`playzoid_ws_connections`, maintained on WS start/stop), and live DB pool gauges (`playzoid_db_pool_connections{state=size|idle|in_use}`) sampled at scrape time. The `/metrics` route never records itself. `prometheus` 0.14 added.
+- `GET /openapi.json` (task 0.4.10) — OpenAPI 3.0 document generated from a single route table (22 routes, bearer-auth security scheme). `utoipa` 5.5 added. CI `openapi` job boots the server in degraded mode and validates the served spec — drift fails the job.
+- CI `cargo audit` now gates (task 0.4.11): `continue-on-error` removed, `validator` bumped 0.18→0.20 (clears RUSTSEC-2024-0421), `.cargo/audit.toml` documents the two remaining unfixable advisories (`h2` via actix-http, `rsa` — TLS-mitigated).
+- `tests/rate_limit_integration.rs` (task 0.4.12) — live-stack suite: budget exhaustion with 429 headers, per-client-IP buckets, `/healthz` never limited, auth-class tight budget, disabled-limiter pass-through. Deterministic across reruns via per-test bucket cleanup.
+- `docs/TALO_API.md` (task 0.4.13) — `/v1` canonical-prefix note, game-settings / events / feedback / rate-limit / metrics / OpenAPI sections, `game_settings` + `analytics_events` schema tables, remaining-TODOs trimmed.
+
+### Security note
+- `cargo audit` is now a CI gate; the two ignored advisories (`h2` RUSTSEC-2026-0258, `rsa` RUSTSEC-2023-0071) are documented with rationale and tracked for the actix-web 5 / TLS mitigations.
+
 ## [Unreleased] — 2026-08-26 — Redis-backed rate limiting (task 0.4.8)
 
 ### Added
