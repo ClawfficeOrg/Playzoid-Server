@@ -46,7 +46,6 @@ jobs:
   audit:
     name: cargo-audit
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -66,8 +65,63 @@ jobs:
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit || true
 
-      - name: Run cargo-audit
+      - name: Run cargo-audit (gating)
+        # Gating since task 0.4.11: advisories are either fixed or ignored
+        # with rationale in .cargo/audit.toml, so a non-zero exit blocks CI.
         run: cargo audit
+
+  openapi:
+    name: OpenAPI drift check
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/ci
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_SECRET: ci-only-secret-ci-only-secret-0000
+      HOST: 127.0.0.1
+      PORT: 8090
+      RUST_LOG: info
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-openapi-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-openapi-
+
+      - name: Build
+        run: cargo build
+
+      - name: Boot server (degraded) and validate served spec
+        run: |
+          ./target/debug/playzoid_server &
+          PID=$!
+          trap "kill $PID" EXIT
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/openapi.json > /tmp/openapi.json 2>/dev/null; then ok=1; break; fi
+            echo "waiting for server ($i)"; sleep 1
+          done
+          [ "$ok" = "1" ] || { echo "server never served /openapi.json"; exit 1; }
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("/tmp/openapi.json"))
+          assert doc["openapi"].startswith("3.1"), doc["openapi"]
+          for p in ["/v1/auth/register", "/v1/auth/login", "/v1/players/{id}",
+                    "/v1/leaderboards/{game_id}", "/v1/saves/{player_id}",
+                    "/v1/games/{game_id}/settings", "/v1/events", "/v1/feedback",
+                    "/v1/socket-tickets", "/healthz", "/metrics", "/openapi.json"]:
+              assert p in doc["paths"], f"drift: route {p} not documented"
+          print(f"OK: {len(doc['paths'])} paths documented, spec {doc['openapi']}")
+          PY
 
   sqlx-migrate:
     name: sqlx migrate (mysql)

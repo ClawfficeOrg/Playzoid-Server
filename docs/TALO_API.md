@@ -293,10 +293,21 @@ implemented view changes here.
 The sections above document the upstream **Talo TypeScript** API shapes for reference.
 The sections below document what is **actually implemented** in this server.
 
-Route prefixes: `/auth`, `/players`, `/leaderboards`, `/saves` (no `/v1` prefix); the
-socket-ticket endpoint lives at `/v1/socket-tickets` and the WebSocket at `/ws`.
+Route prefixes: **canonical paths carry the `/v1` prefix** (`/v1/auth`, `/v1/players`,
+`/v1/leaderboards`, `/v1/saves`) since task 0.4.1; the legacy unprefixed
+(`/auth`, `/players`, `/leaderboards`, `/saves`) mounts remain as aliases during the
+transition and share the same handlers. The WebSocket lives at `/ws`.
 Auth scheme: `Authorization: Bearer <token>` on all protected routes.  
 Content-Type: `application/json` for all requests and responses.
+
+Rate limiting (task 0.4.8): public-route budgets are enforced per client IP;
+exceeded requests answer `429 Too Many Requests` with `Retry-After` and
+`X-RateLimit-Limit/Remaining/Reset` headers. `/healthz`, `/metrics` and
+`/openapi.json` are never limited.
+
+An OpenAPI 3.0 document is served at `GET /openapi.json` (task 0.4.10) and is the
+authoritative machine-readable route reference; CI fails on drift. Prometheus
+metrics are served at `GET /metrics` (task 0.4.9).
 
 ### Common types
 
@@ -859,6 +870,150 @@ save ids affect zero rows and return 404 (never leaks). Response 204 — empty b
 
 ---
 
+## HTTP API: game settings (implemented, Phase 0.4)
+
+Auth: `Authorization: Bearer <token>` required on every route. A **Playzoid
+extension** — upstream Talo has no per-game settings endpoint (documented in
+`docs/memory.md`). `{game_id}` is the opaque route identifier (1..=64 chars).
+
+| Method | Path                            | Purpose                       |
+|--------|---------------------------------|-------------------------------|
+| GET    | `/v1/games/{game_id}/settings`  | Fetch a game's settings       |
+| PUT    | `/v1/games/{game_id}/settings`  | Set a game's settings (upsert)|
+
+### GET /v1/games/{game_id}/settings
+
+Response 200 — `GameSettingView`:
+
+```json
+{ "gameId": "my-game", "config": { "playerSpeed": 1.5 }, "createdAt": "2026-08-26T00:00:00Z" }
+```
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Settings returned |
+| 401 | Missing or invalid token |
+| 404 | No settings row for `{game_id}` |
+| 503 | Database unavailable |
+
+### PUT /v1/games/{game_id}/settings
+
+Request body (`deny_unknown_fields`):
+
+```json
+{ "config": { "playerSpeed": 1.5 } }
+```
+
+| Field    | Type       | Required | Constraints            |
+|----------|------------|----------|------------------------|
+| `config` | JSON value | yes      | ≤ 32 KiB, non-null     |
+
+`{game_id}` is trimmed symmetrically on read-back so GET addresses the exact row a PUT
+created. Response 200 — `GameSettingView` (`created_at` preserved on update).
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Settings upserted; body is `GameSettingView` |
+| 400 | Validation error (missing config, oversize blob, `{game_id}` > 64 chars, unknown fields) |
+| 401 | Missing or invalid token |
+| 404 | Unknown or soft-deleted player |
+| 503 | Database unavailable |
+
+---
+
+## HTTP API: analytics events (implemented, Phase 0.4)
+
+Auth: `Authorization: Bearer <token>` required.
+
+### POST /v1/events
+
+Ingest a batch of analytics events. **Fire-and-forget**: accepted batches answer
+`202 {"accepted": n}` even if the post-validation insert fails (logged server-side) —
+telemetry loss never blocks clients.
+
+Body is a bare JSON array (no wrapper object, no client timestamps — `created_at` is
+DB-stamped), validated whole-batch before any SQL:
+
+```json
+[ { "name": "level_started", "props": { "level": 3 } } ]
+```
+
+| Constraint | Value |
+|------------|-------|
+| Batch size | 1..=100 events |
+| `name`     | trimmed, 1..=64 chars (matches `VARCHAR(64)`) |
+| `props`    | optional JSON; ≤ 4 KiB when serialised |
+| Unknown fields | rejected per event (`deny_unknown_fields`) |
+
+Attribution is best-effort: an unknown/deleted caller stores anonymous rows
+(`player_id NULL`) rather than failing.
+
+| Status | Meaning |
+|--------|---------|
+| 202 | Batch accepted (`{"accepted": n}`) |
+| 400 | Whole-batch validation failure (nothing written) |
+| 401 | Missing or invalid token |
+| 503 | Database unavailable (no pool) |
+
+---
+
+## HTTP API: feedback (implemented, Phase 0.4)
+
+Auth: `Authorization: Bearer <token>` required.
+
+### POST /v1/feedback
+
+Submit player feedback. Stored as `name = "feedback"` rows in the append-only
+`analytics_events` table (sink-reuse decision, `docs/memory.md`). Unlike events this
+is **honest-failure**: a post-validation DB failure answers `500` (details logged
+server-side only) — user content is never silently dropped.
+
+Request body (`deny_unknown_fields`):
+
+```json
+{ "message": "Great game, one nitpick though" }
+```
+
+| Field     | Type   | Required | Constraints                                          |
+|-----------|--------|----------|------------------------------------------------------|
+| `message` | string | yes      | trimmed 1..=1000 chars; JSON-encoded ≤ 4 KiB         |
+
+Response 201 — `{"received": true}`.
+
+| Status | Meaning |
+|--------|---------|
+| 201 | Feedback stored (`{"received": true}`) |
+| 400 | Validation failure (nothing written) |
+| 401 | Missing or invalid token |
+| 500 | Post-validation DB failure |
+| 503 | Database unavailable (no pool) |
+
+Best-effort attribution identical to events: unknown/deleted callers store anonymous
+rows rather than failing.
+
+---
+
+## HTTP API: rate limiting (implemented, Phase 0.4)
+
+Enforced by global middleware on public routes (`/v1/auth/**`, `/auth/**` with a tight
+budget; other configured public prefixes with a general budget). Buckets are
+Redis fixed windows, one key per `(class, client ip, window_start)`.
+
+Blocked responses (429):
+
+```json
+{ "error": "rate limit exceeded" }
+```
+
+Headers: `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+`X-RateLimit-Reset`.
+
+Degraded mode is fail-open: Redis down at boot (no limiter app data) or a mid-flight
+backend error passes the request through. `X-Forwarded-For` trust is opt-in
+(`RATE_LIMIT_TRUST_XFF=true`) — the default keys on the socket peer IP.
+
+---
+
 ## WebSocket protocol (implemented, Phase 0.3)
 
 Connection is via a WebSocket upgrade to `/ws`, authenticated by a one-shot socket
@@ -1013,7 +1168,8 @@ pub struct ApiErrorEnvelope {
 
 ## Remaining TODOs (next verification pass)
 - [x] Map the remaining complex upstream domain models to full serde structs: `PlayerAlias`, `PlayerAuth`, `GameChannel`, and the full `LeaderboardEntry` (only the public entry *view* is modelled today — upstream also carries `props`, and game-channel / alias models are not persisted server-side yet). → done in task 0.4.2; see "Domain models (upstream parity)" above.
-- Upstream routes live under a `/v1` prefix; this server exposes `/auth`, `/players`, `/leaderboards`, `/saves` without it (Phase 0.2 decision) and `/v1/socket-tickets` with it — reconcile on a future parity pass.
+- [x] Upstream routes live under a `/v1` prefix; this server exposes `/auth`, `/players`, `/leaderboards`, `/saves` without it (Phase 0.2 decision) and `/v1/socket-tickets` with it — reconcile on a future parity pass. → done in task 0.4.1: canonical `/v1` mounts now exist with legacy unprefixed aliases.
+- [x] Document the Phase 0.4 endpoints (game settings, events, feedback, rate limiting, metrics, OpenAPI). → done in task 0.4.13; `/openapi.json` is the machine-readable source of truth.
 - Add HTTP success/error response examples for the remaining upstream (non-implemented) routes as they land.
 
 Verification plan (next steps):
@@ -1121,5 +1277,42 @@ Indexes: `UNIQUE(public_id)`, secondary on `player_id`. Both migration pairs
 (`20260825000001_create_leaderboards`, `20260825000002_create_game_saves`) are
 reversible (`*.up.sql` / `*.down.sql`) and verified in CI by the optional
 `sqlx-migrate` job.
+
+---
+
+## Canonical `game_settings` table (database schema)
+
+Backing schema for the Phase 0.4 game-settings endpoints
+(`migrations/20260826000001_create_game_settings.up.sql`). Per-game JSON config,
+one row per game.
+
+| Column       | Type                                              | Notes                                    |
+|--------------|---------------------------------------------------|------------------------------------------|
+| `id`         | `BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT`      | Internal. Never exposed.                 |
+| `game_id`    | `VARCHAR(64) UNIQUE NOT NULL`                     | Route identifier (`{game_id}`).          |
+| `config`     | `JSON NOT NULL`                                   | Arbitrary per-game settings blob.        |
+| `created_at` | `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`     | Preserved across updates.                |
+| `updated_at` | `DATETIME ... ON UPDATE CURRENT_TIMESTAMP`        |                                          |
+
+Indexes: `UNIQUE(game_id)`.
+
+---
+
+## Canonical `analytics_events` table (database schema)
+
+Backing schema for the Phase 0.4 events + feedback endpoints
+(`migrations/20260826000002_create_analytics_events.up.sql`). Append-only event log —
+no `updated_at`, no `public_id` (rows are never updated and never addressed by
+clients in v0).
+
+| Column       | Type                                              | Notes                                    |
+|--------------|---------------------------------------------------|------------------------------------------|
+| `id`         | `BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT`      | Internal.                                |
+| `player_id`  | `BIGINT UNSIGNED NULL`                            | FK → `players(id)` **ON DELETE SET NULL** (deleting a player never erases their events). `NULL` = anonymous. |
+| `name`       | `VARCHAR(64) NOT NULL`                            | Event key (`analytics` ingest) or `"feedback"` (feedback submissions). |
+| `props`      | `JSON NULL`                                       | Free-form payload.                       |
+| `created_at` | `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`     | DB-stamped; no client timestamps.        |
+
+Indexes: `(player_id)`, `(name, created_at)` — kept minimal for a high-write log.
 
 <!-- End of file (verified partial mapping). Sonnet produced this update. -->

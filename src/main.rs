@@ -1,5 +1,11 @@
 use actix_web::{App, HttpServer, web};
-use playzoid_server::{api, config::Config, db, middleware::rate_limit, sockets};
+use playzoid_server::{
+    api,
+    config::Config,
+    db,
+    middleware::{metrics, rate_limit},
+    sockets,
+};
 use tracing::info;
 use tracing_actix_web::TracingLogger;
 
@@ -59,6 +65,7 @@ async fn main() -> std::io::Result<()> {
         let mut app = App::new()
             .wrap(TracingLogger::default())
             .wrap(rate_limit::RateLimit)
+            .wrap(metrics::MetricsMiddleware)
             .app_data(cfg_data.clone());
         if let Some(r) = redis_mgr.clone() {
             // Rate limiting rides the same Redis manager; without it the
@@ -86,6 +93,8 @@ async fn main() -> std::io::Result<()> {
             .configure(api::events::config)
             .configure(api::feedback::config)
             .configure(api::socket_ticket::config)
+            .configure(api::metrics::config)
+            .configure(api::openapi::config)
             .route("/ws", web::get().to(sockets::ws::ws_index));
         if let Some(p) = pool.clone() {
             app = app.app_data(web::Data::new(p));
