@@ -94,3 +94,45 @@ bullets over prose. Read the last few sections before starting a similar task.
   `cargo test --test '*' -- --ignored` while compose is up.
 - Unique usernames (`u<uuid12>`) prevent cross-run collisions on the shared
   dev database.
+
+## 0.4.8 — Redis rate limiting
+
+- Cloning a `ServiceRequest` for inspection then building a response from the
+  clone panics: the inner `HttpRequest` lives in an `Rc`, and actix's
+  `match_info_mut()` requires refcount 1. Decide the path first, then consume
+  the request once (`req.into_response(...)` for 429, `service.call(req)`
+  otherwise) — never clone.
+- A middleware whose `call` returns `Pin<Box<dyn Future + 'static>>` cannot
+  capture `&self`. Don't reach for `S: Clone`; store the service as `Arc<S>`
+  (needs only `S: 'static`) and clone the `Arc` before the async block.
+- `web::Data<T>` downcasts on the concrete type, generics included. A generic
+  `RateLimiter<C>` in `app_data` silently mismatches the middleware's lookup —
+  the middleware just never runs. Erase to `Arc<dyn WindowCounter>` (or
+  similar) so the stored type is monomorphic.
+- Object-safe async traits need `Pin<Box<dyn Future + Send>>` returns; to keep
+  them `'static`, copy owned captures (connection clone, key string) before
+  building the future.
+
+## 0.4.9-0.4.13 — Production hardening batch
+
+- `test::init_service` returns an opaque `impl ServiceFactory`; returning it
+  from a helper as `impl` hides its `Service<Request>` impl, so `call_service`
+  won't compile. Keep the `init_service(...)` call inline (macro) so the
+  concrete type stays visible — `App<impl ServiceFactory<...>>` as a return
+  type also works, but only if you return the un-wrapped `App`.
+- `#[actix_web::test]` on a non-async fn errors "async keyword missing", and
+  `use actix_web::test` shadows the builtin `#[test]` attribute (actix-web
+  re-exports a `test` attribute macro). Rename the import (`test as awtest`) or
+  every `#[test]` in that module breaks.
+- prometheus `CounterVec`/`HistogramVec` with no label values emit NO output —
+  a fresh registry renders only the plain gauges. Unit tests must record a
+  sample before asserting a vec family exists.
+- Live Redis rate-limit integration tests are flaky across reruns inside the
+  same 60s window unless the test deletes its own bucket keys first — clean
+  `rl:{class}:{ip}:{window_start}` before asserting, don't just randomise IPs.
+- OpenAPI from a route table beats per-handler `#[utoipa::path]` for a large
+  handler surface: one table + builder code + a drift unit test + a CI scrape
+  is far less churn and still fails on drift.
+- `cargo audit` gating requires curating `.cargo/audit.toml`: bump deps to
+  clear what's fixable (validator 0.20 cleared idna), and ignore the rest with
+  an explicit rationale so the gate stays meaningful.

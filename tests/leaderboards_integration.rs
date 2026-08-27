@@ -8,7 +8,11 @@
 //! Override with `DATABASE_URL` / `REDIS_URL` env vars.
 
 use actix_web::{App, http::StatusCode, test, web};
-use playzoid_server::{api, config::Config, db};
+use playzoid_server::{
+    api,
+    config::{Config, RateLimitConfig},
+    db,
+};
 use redis::aio::ConnectionManager;
 use serde_json::Value;
 use sqlx::MySqlPool;
@@ -35,6 +39,7 @@ async fn test_fixtures() -> (MySqlPool, ConnectionManager, Config) {
         redis_url,
         jwt_secret: JWT_SECRET.into(),
         jwt_expiry_secs: 3600,
+        rate_limit: RateLimitConfig::default(),
     };
     (pool, mgr, cfg)
 }
@@ -60,7 +65,7 @@ async fn register_and_login(
     .await;
 
     let reg = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(serde_json::json!({ "username": username, "password": "pass12345" }))
         .to_request();
     let reg_resp = test::call_service(&app, reg).await;
@@ -69,7 +74,7 @@ async fn register_and_login(
     let player_id = body["id"].as_str().unwrap().to_owned();
 
     let login = test::TestRequest::post()
-        .uri("/auth/login")
+        .uri("/v1/auth/login")
         .set_json(serde_json::json!({ "username": username, "password": "pass12345" }))
         .to_request();
     let login_resp = test::call_service(&app, login).await;
@@ -119,7 +124,7 @@ async fn get_leaderboard_requires_auth() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri("/leaderboards/no-such-board")
+        .uri("/v1/leaderboards/no-such-board")
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -140,7 +145,7 @@ async fn get_unknown_leaderboard_returns_404() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri("/leaderboards/definitely-not-a-board-xyz")
+        .uri("/v1/leaderboards/definitely-not-a-board-xyz")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -174,7 +179,7 @@ async fn get_leaderboard_ranks_scores_descending() {
     )
     .await;
     let req = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}"))
+        .uri(&format!("/v1/leaderboards/{board}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -223,7 +228,7 @@ async fn get_leaderboard_pagination_ranks_continue_across_pages() {
     .await;
 
     let page1 = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}?page=1&per_page=2"))
+        .uri(&format!("/v1/leaderboards/{board}?page=1&per_page=2"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, page1).await;
@@ -236,7 +241,7 @@ async fn get_leaderboard_pagination_ranks_continue_across_pages() {
     assert_eq!(entries[1]["rank"], 2);
 
     let page2 = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}?page=2&per_page=2"))
+        .uri(&format!("/v1/leaderboards/{board}?page=2&per_page=2"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, page2).await;
@@ -265,7 +270,7 @@ async fn get_leaderboard_rejects_invalid_pagination() {
 
     for q in ["?page=0", "?per_page=0", "?per_page=101"] {
         let req = test::TestRequest::get()
-            .uri(&format!("/leaderboards/some-board{q}"))
+            .uri(&format!("/v1/leaderboards/some-board{q}"))
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -300,7 +305,7 @@ async fn submit_entry_requires_auth() {
     )
     .await;
     let req = test::TestRequest::post()
-        .uri("/leaderboards/any-board/entries")
+        .uri("/v1/leaderboards/any-board/entries")
         .set_json(serde_json::json!({ "score": 100 }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -315,7 +320,7 @@ async fn submit_entry_unknown_board_returns_404() {
         register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
     let app = leaderboard_app!(pool, mgr, cfg);
     let req = test::TestRequest::post()
-        .uri("/leaderboards/no-such-board-xyz/entries")
+        .uri("/v1/leaderboards/no-such-board-xyz/entries")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 100 }))
         .to_request();
@@ -335,7 +340,7 @@ async fn submit_entry_returns_201_with_rank_and_props() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri(&format!("/leaderboards/{board}/entries"))
+        .uri(&format!("/v1/leaderboards/{board}/entries"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "score": 1234,
@@ -371,7 +376,7 @@ async fn submit_entry_duplicate_player_returns_409() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri(&format!("/leaderboards/{board}/entries"))
+        .uri(&format!("/v1/leaderboards/{board}/entries"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 200 }))
         .to_request();
@@ -394,7 +399,7 @@ async fn submitted_entries_appear_ranked_in_get_leaderboard() {
     let app = leaderboard_app!(pool, mgr, cfg);
     for (token, score) in [(&token_a, 50i64), (&token_b, 500)] {
         let req = test::TestRequest::post()
-            .uri(&format!("/leaderboards/{board}/entries"))
+            .uri(&format!("/v1/leaderboards/{board}/entries"))
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({ "score": score }))
             .to_request();
@@ -403,7 +408,7 @@ async fn submitted_entries_appear_ranked_in_get_leaderboard() {
     }
 
     let req = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}"))
+        .uri(&format!("/v1/leaderboards/{board}"))
         .insert_header(("Authorization", format!("Bearer {token_a}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -430,7 +435,7 @@ async fn submit_entry_rejects_invalid_props() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri(&format!("/leaderboards/{board}/entries"))
+        .uri(&format!("/v1/leaderboards/{board}/entries"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 10, "props": {"not": "array"} }))
         .to_request();
@@ -452,7 +457,7 @@ async fn update_entry_requires_auth() {
     )
     .await;
     let req = test::TestRequest::put()
-        .uri("/leaderboards/any-board/entries/some-player")
+        .uri("/v1/leaderboards/any-board/entries/some-player")
         .set_json(serde_json::json!({ "score": 200 }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -476,7 +481,7 @@ async fn update_entry_cross_player_returns_403() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::put()
-        .uri(&format!("/leaderboards/{board}/entries/{pid_a}"))
+        .uri(&format!("/v1/leaderboards/{board}/entries/{pid_a}"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .set_json(serde_json::json!({ "score": 999 }))
         .to_request();
@@ -496,7 +501,7 @@ async fn update_entry_without_existing_entry_returns_404() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::put()
-        .uri(&format!("/leaderboards/{board}/entries/{pid}"))
+        .uri(&format!("/v1/leaderboards/{board}/entries/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 200 }))
         .to_request();
@@ -521,7 +526,7 @@ async fn update_entry_changes_score_and_recomputes_rank() {
     seed_entry(&pool, &board, &pid_a, 100).await;
     let app = leaderboard_app!(pool, mgr, cfg);
     let req = test::TestRequest::post()
-        .uri(&format!("/leaderboards/{board}/entries"))
+        .uri(&format!("/v1/leaderboards/{board}/entries"))
         .insert_header(("Authorization", format!("Bearer {token_b}")))
         .set_json(serde_json::json!({ "score": 500 }))
         .to_request();
@@ -532,7 +537,7 @@ async fn update_entry_changes_score_and_recomputes_rank() {
 
     // A updates to 1000 → rank 1; B drops to rank 2.
     let req = test::TestRequest::put()
-        .uri(&format!("/leaderboards/{board}/entries/{pid_a}"))
+        .uri(&format!("/v1/leaderboards/{board}/entries/{pid_a}"))
         .insert_header(("Authorization", format!("Bearer {token_a}")))
         .set_json(serde_json::json!({ "score": 1000 }))
         .to_request();
@@ -545,7 +550,7 @@ async fn update_entry_changes_score_and_recomputes_rank() {
 
     // Verify via GET leaderboard.
     let req = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}"))
+        .uri(&format!("/v1/leaderboards/{board}"))
         .insert_header(("Authorization", format!("Bearer {token_a}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -568,7 +573,7 @@ async fn update_entry_keeps_props_when_omitted_and_replaces_when_supplied() {
 
     // Create with props via POST.
     let req = test::TestRequest::post()
-        .uri(&format!("/leaderboards/{board}/entries"))
+        .uri(&format!("/v1/leaderboards/{board}/entries"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "score": 10,
@@ -582,7 +587,7 @@ async fn update_entry_keeps_props_when_omitted_and_replaces_when_supplied() {
 
     // Update score only → props preserved in DB.
     let req = test::TestRequest::put()
-        .uri(&format!("/leaderboards/{board}/entries/{pid}"))
+        .uri(&format!("/v1/leaderboards/{board}/entries/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 20 }))
         .to_request();
@@ -609,7 +614,7 @@ async fn update_entry_keeps_props_when_omitted_and_replaces_when_supplied() {
 
     // Update with new props → replaced.
     let req = test::TestRequest::put()
-        .uri(&format!("/leaderboards/{board}/entries/{pid}"))
+        .uri(&format!("/v1/leaderboards/{board}/entries/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "score": 30,
@@ -643,7 +648,7 @@ async fn submit_entry_missing_score_returns_400() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::post()
-        .uri("/leaderboards/some-board/entries")
+        .uri("/v1/leaderboards/some-board/entries")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "props": [] }))
         .to_request();
@@ -662,7 +667,7 @@ async fn submit_entry_rejects_oversized_props_returns_400() {
     let big = serde_json::Value::Array(vec![serde_json::Value::String("x".into());
         playzoid_server::services::leaderboards::MAX_PROPS_BYTES]);
     let req = test::TestRequest::post()
-        .uri("/leaderboards/some-board/entries")
+        .uri("/v1/leaderboards/some-board/entries")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 100, "props": big }))
         .to_request();
@@ -681,7 +686,7 @@ async fn submit_entry_unknown_player_returns_404() {
     let token = token_for(&cfg, &Uuid::new_v4().to_string());
     let app = leaderboard_app!(pool, mgr, cfg);
     let req = test::TestRequest::post()
-        .uri(&format!("/leaderboards/{board}/entries"))
+        .uri(&format!("/v1/leaderboards/{board}/entries"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 100 }))
         .to_request();
@@ -698,7 +703,7 @@ async fn update_entry_missing_score_returns_400() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::put()
-        .uri(&format!("/leaderboards/some-board/entries/{pid}"))
+        .uri(&format!("/v1/leaderboards/some-board/entries/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "props": [] }))
         .to_request();
@@ -717,7 +722,7 @@ async fn update_entry_rejects_oversized_props_returns_400() {
     let big = serde_json::Value::Array(vec![serde_json::Value::String("x".into());
         playzoid_server::services::leaderboards::MAX_PROPS_BYTES]);
     let req = test::TestRequest::put()
-        .uri(&format!("/leaderboards/some-board/entries/{pid}"))
+        .uri(&format!("/v1/leaderboards/some-board/entries/{pid}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 200, "props": big }))
         .to_request();
@@ -735,7 +740,7 @@ async fn update_entry_unknown_board_returns_404() {
 
     let req = test::TestRequest::put()
         .uri(&format!(
-            "/leaderboards/definitely-not-a-board-xyz/entries/{pid}"
+            "/v1/leaderboards/definitely-not-a-board-xyz/entries/{pid}"
         ))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "score": 200 }))
@@ -756,7 +761,7 @@ async fn get_leaderboard_empty_board_returns_empty_entries() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}"))
+        .uri(&format!("/v1/leaderboards/{board}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -786,7 +791,7 @@ async fn get_leaderboard_page_beyond_data_returns_empty_entries() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}?page=9&per_page=50"))
+        .uri(&format!("/v1/leaderboards/{board}?page=9&per_page=50"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -809,7 +814,7 @@ async fn get_leaderboard_non_numeric_pagination_returns_400() {
 
     for q in ["?page=abc", "?per_page=xyz", "?page=1&per_page="] {
         let req = test::TestRequest::get()
-            .uri(&format!("/leaderboards/some-board{q}"))
+            .uri(&format!("/v1/leaderboards/some-board{q}"))
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -838,7 +843,7 @@ async fn get_leaderboard_ranks_tied_scores_by_earlier_submission() {
     let app = leaderboard_app!(pool, mgr, cfg);
 
     let req = test::TestRequest::get()
-        .uri(&format!("/leaderboards/{board}"))
+        .uri(&format!("/v1/leaderboards/{board}"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -850,4 +855,41 @@ async fn get_leaderboard_ranks_tied_scores_by_earlier_submission() {
     assert_eq!(entries[0]["rank"], 1);
     assert_eq!(entries[1]["playerId"], pid_b);
     assert_eq!(entries[1]["rank"], 2);
+}
+
+// ── Legacy `/leaderboards` alias paths (0.4.1 transition) ─────────────────────
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn submit_entry_via_legacy_path_still_works() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let board = format!("board-{}", &Uuid::new_v4().to_string()[..8]);
+    ensure_leaderboard(&pool, &board).await;
+
+    let (_, token) =
+        register_and_login(pool.clone(), mgr.clone(), cfg.clone(), &unique_username()).await;
+    let app = leaderboard_app!(pool, mgr, cfg);
+
+    // Submit through the legacy unprefixed mount…
+    let req = test::TestRequest::post()
+        .uri(&format!("/leaderboards/{board}/entries"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(serde_json::json!({ "score": 77 }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // …and read it back through the canonical `/v1` mount: both mounts
+    // share the same underlying service and data.
+    let req = test::TestRequest::get()
+        .uri(&format!("/v1/leaderboards/{board}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["score"], 77);
 }

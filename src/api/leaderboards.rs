@@ -1,28 +1,39 @@
-//! `/leaderboards` HTTP endpoints.
+//! `/v1/leaderboards` HTTP endpoints.
 //!
-//! `GET  /leaderboards/{game_id}`                       — paginated top scores (auth required).
-//! `POST /leaderboards/{game_id}/entries`               — submit a score (auth required).
-//! `PUT  /leaderboards/{game_id}/entries/{player_id}`   — update own score (auth required).
+//! `GET  /v1/leaderboards/{game_id}`                     — paginated top scores (auth required).
+//! `POST /v1/leaderboards/{game_id}/entries`             — submit a score (auth required).
+//! `PUT  /v1/leaderboards/{game_id}/entries/{player_id}` — update own score (auth required).
 //! `game_id` is the leaderboard's route identifier (`internal_name`).
+//!
+//! The routes are also mounted under the legacy unprefixed `/leaderboards`
+//! alias for the 0.4.1 transition (upstream parity: canonical paths carry
+//! the `/v1` prefix). Both mounts share one route definition so they cannot drift.
 
 use crate::middleware::auth::AuthenticatedUser;
 use crate::services::leaderboards::{
     self as leaderboards_svc, LeaderboardServiceError, MAX_PER_PAGE, MAX_PROPS_BYTES,
 };
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpResponse, Scope, web};
 use serde::Deserialize;
 use sqlx::MySqlPool;
 
+/// Register the leaderboard routes: canonical `/v1/leaderboards` plus the
+/// legacy `/leaderboards` alias kept during the 0.4.1 transition.
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/leaderboards")
-            .route("/{game_id}/entries", web::post().to(submit_entry))
-            .route(
-                "/{game_id}/entries/{player_id}",
-                web::put().to(update_entry),
-            )
-            .route("/{game_id}", web::get().to(get_leaderboard)),
-    );
+    cfg.service(scoped("/v1/leaderboards"))
+        .service(scoped("/leaderboards"));
+}
+
+/// Build the leaderboard routes under the given scope prefix so the
+/// canonical and legacy mounts share a single route definition.
+fn scoped(prefix: &str) -> Scope {
+    web::scope(prefix)
+        .route("/{game_id}/entries", web::post().to(submit_entry))
+        .route(
+            "/{game_id}/entries/{player_id}",
+            web::put().to(update_entry),
+        )
+        .route("/{game_id}", web::get().to(get_leaderboard))
 }
 
 /// Pagination query parameters for `GET /leaderboards/{game_id}`.
@@ -76,7 +87,7 @@ async fn get_leaderboard(
     }
 }
 
-// ── POST /leaderboards/{game_id}/entries ──────────────────────────────────────
+// ── POST /v1/leaderboards/{game_id}/entries ──────────────────────────────────────
 
 /// Request body for submitting a leaderboard score.
 #[derive(Debug, Deserialize)]
@@ -159,7 +170,7 @@ async fn submit_entry(
     }
 }
 
-// ── PUT /leaderboards/{game_id}/entries/{player_id} ───────────────────────────
+// ── PUT /v1/leaderboards/{game_id}/entries/{player_id} ───────────────────────────
 
 /// Update the authenticated player's own score on a leaderboard.
 ///
@@ -250,7 +261,7 @@ fn error_body(msg: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, RateLimitConfig};
     use crate::services::auth as auth_svc;
     use actix_web::{App, http::StatusCode, test};
 
@@ -264,6 +275,7 @@ mod tests {
             redis_url: "redis://test".into(),
             jwt_secret: SECRET.into(),
             jwt_expiry_secs: 3600,
+            rate_limit: RateLimitConfig::default(),
         }
     }
 
@@ -280,7 +292,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/leaderboards/game-highscores")
+            .uri("/v1/leaderboards/game-highscores")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -296,7 +308,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/leaderboards/game-highscores")
+            .uri("/v1/leaderboards/game-highscores")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -313,7 +325,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/leaderboards/game-highscores?page=0")
+            .uri("/v1/leaderboards/game-highscores?page=0")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -330,7 +342,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/leaderboards/game-highscores?per_page=0")
+            .uri("/v1/leaderboards/game-highscores?per_page=0")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -347,14 +359,14 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::get()
-            .uri("/leaderboards/game-highscores?per_page=101")
+            .uri("/v1/leaderboards/game-highscores?per_page=101")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // ── POST /leaderboards/{game_id}/entries ───────────────────────────────
+    // ── POST /v1/leaderboards/{game_id}/entries ───────────────────────────────
 
     #[actix_web::test]
     async fn submit_entry_requires_auth() {
@@ -365,7 +377,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/leaderboards/game-highscores/entries")
+            .uri("/v1/leaderboards/game-highscores/entries")
             .set_json(serde_json::json!({"score": 100}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -382,7 +394,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/leaderboards/game-highscores/entries")
+            .uri("/v1/leaderboards/game-highscores/entries")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"score": 100}))
             .to_request();
@@ -400,7 +412,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/leaderboards/game-highscores/entries")
+            .uri("/v1/leaderboards/game-highscores/entries")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"score": 100, "bogus": true}))
             .to_request();
@@ -418,7 +430,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::post()
-            .uri("/leaderboards/game-highscores/entries")
+            .uri("/v1/leaderboards/game-highscores/entries")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"score": 100, "props": {"not": "array"}}))
             .to_request();
@@ -426,7 +438,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // ── PUT /leaderboards/{game_id}/entries/{player_id} ────────────────────
+    // ── PUT /v1/leaderboards/{game_id}/entries/{player_id} ────────────────────
 
     #[actix_web::test]
     async fn update_entry_requires_auth() {
@@ -437,7 +449,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/leaderboards/game-highscores/entries/player-uuid-1")
+            .uri("/v1/leaderboards/game-highscores/entries/player-uuid-1")
             .set_json(serde_json::json!({"score": 200}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -454,7 +466,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/leaderboards/game-highscores/entries/player-uuid-1")
+            .uri("/v1/leaderboards/game-highscores/entries/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"score": 200}))
             .to_request();
@@ -473,7 +485,7 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/leaderboards/game-highscores/entries/player-uuid-2")
+            .uri("/v1/leaderboards/game-highscores/entries/player-uuid-2")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"score": 200}))
             .to_request();
@@ -491,11 +503,49 @@ mod tests {
         )
         .await;
         let req = test::TestRequest::put()
-            .uri("/leaderboards/game-highscores/entries/player-uuid-1")
+            .uri("/v1/leaderboards/game-highscores/entries/player-uuid-1")
             .insert_header(("Authorization", format!("Bearer {token}")))
             .set_json(serde_json::json!({"score": 200, "props": {"not": "array"}}))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── Legacy `/leaderboards` alias mount (0.4.1 transition) ──────────────
+
+    /// The unprefixed alias must keep routing identically during transition.
+    #[actix_web::test]
+    async fn submit_entry_legacy_alias_requires_auth() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/leaderboards/game-highscores/entries")
+            .set_json(serde_json::json!({"score": 100}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn update_entry_legacy_alias_cross_player_returns_403() {
+        // Ownership check runs before any SQL — fake pool never connects.
+        let token = valid_token("player-uuid-1");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(stub_config()))
+                .configure(config),
+        )
+        .await;
+        let req = test::TestRequest::put()
+            .uri("/leaderboards/game-highscores/entries/player-uuid-2")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .set_json(serde_json::json!({"score": 200}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

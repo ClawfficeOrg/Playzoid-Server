@@ -2,6 +2,126 @@
 
 # CHANGES.md
 
+## [0.4.0] — 2026-08-27 — Analytics, Config, Feedback & Production Hardening
+
+Release of the full Phase 0.4 line (tasks 0.4.1–0.4.13). Highlights:
+
+- **Route prefix parity** (0.4.1): canonical `/v1` mounts for auth, players, leaderboards and saves, with legacy unprefixed aliases during the transition.
+- **Full domain-model structs** (0.4.2) lifted from verified upstream shapes; **game settings** schema + GET/PUT endpoints (0.4.3/0.4.4); **analytics events** schema + `POST /v1/events` fire-and-forget ingest (0.4.5/0.4.6); **`POST /v1/feedback`** with honest-failure semantics (0.4.7).
+- **Redis fixed-window rate limiting** (0.4.8): per-`(class, ip, window)` buckets, auth + default budgets, fail-open degraded mode, `429` with `Retry-After`/`X-RateLimit-*` headers.
+- **Prometheus `/metrics`** (0.4.9): request counters/histograms, WS connection gauge, DB pool gauges.
+- **OpenAPI `/openapi.json`** (0.4.10): generated from a single route table; CI fails on drift.
+- **Gated `cargo audit`** (0.4.11) with a documented ignore list; **live-stack rate-limit integration tests** (0.4.12); **`docs/TALO_API.md`** updated to the `/v1` surface (0.4.13).
+- New deps: `prometheus` 0.14, `utoipa` 5.5; `validator` bumped to 0.20; `actix-web` 4.15 / `actix-http` 3.13.
+
+Per-task detail sections follow.
+
+## [0.4.0] — 2026-08-27 — metrics, OpenAPI, audit gating, tests, API docs (tasks 0.4.9-0.4.13)
+
+### Added
+- `GET /metrics` (task 0.4.9) — Prometheus text exposition: per-request counters/histograms by method+status (`playzoid_http_requests_total`, `playzoid_http_request_duration_seconds`), a WebSocket connection gauge (`playzoid_ws_connections`, maintained on WS start/stop), and live DB pool gauges (`playzoid_db_pool_connections{state=size|idle|in_use}`) sampled at scrape time. The `/metrics` route never records itself. `prometheus` 0.14 added.
+- `GET /openapi.json` (task 0.4.10) — OpenAPI 3.0 document generated from a single route table (22 routes, bearer-auth security scheme). `utoipa` 5.5 added. CI `openapi` job boots the server in degraded mode and validates the served spec — drift fails the job.
+- CI `cargo audit` now gates (task 0.4.11): `continue-on-error` removed, `validator` bumped 0.18→0.20 (clears RUSTSEC-2024-0421), `.cargo/audit.toml` documents the two remaining unfixable advisories (`h2` via actix-http, `rsa` — TLS-mitigated).
+- `tests/rate_limit_integration.rs` (task 0.4.12) — live-stack suite: budget exhaustion with 429 headers, per-client-IP buckets, `/healthz` never limited, auth-class tight budget, disabled-limiter pass-through. Deterministic across reruns via per-test bucket cleanup.
+- `docs/TALO_API.md` (task 0.4.13) — `/v1` canonical-prefix note, game-settings / events / feedback / rate-limit / metrics / OpenAPI sections, `game_settings` + `analytics_events` schema tables, remaining-TODOs trimmed.
+
+### Security note
+- `cargo audit` is now a CI gate; the two ignored advisories (`h2` RUSTSEC-2026-0258, `rsa` RUSTSEC-2023-0071) are documented with rationale and tracked for the actix-web 5 / TLS mitigations.
+
+## [0.4.0] — 2026-08-26 — Redis-backed rate limiting (task 0.4.8)
+
+### Added
+- Fixed-window rate limiting on public routes (`src/middleware/rate_limit.rs`): one Redis bucket per `(class, client ip, window_start)` key, incremented by an atomic `EVAL` `INCR`+`EXPIRE`+`TTL` script so limits hold across workers/instances. Registered globally; enforcement scoped internally to configured public prefixes (`/v1/auth`, `/auth`, `/ws` by default; `/healthz` never limited).
+- Two budgets: `auth` (credential endpoints, tight — brute-force backstop) and `default` (other public routes). Config via `RATE_LIMIT_*` env (see `src/config.rs`), validated at startup; `RATE_LIMIT_TRUST_XFF` opts into `X-Forwarded-For` client identification (opt-in only — header is spoofable without an overwriting proxy).
+- Blocked requests answer `429 Too Many Requests` with `Retry-After` + `X-RateLimit-Limit/Remaining/Reset` headers and the standard `{"error": ...}` JSON body. Response is built from the consumed `ServiceRequest` — the inner `HttpRequest` is never cloned, because actix panics when downstream calls `match_info_mut()` on an `Rc` whose refcount is > 1.
+- Degraded mode is fail-open by design (availability over strictness, `docs/memory.md`): Redis down at boot → no limiter app data → pass-through; mid-flight backend error → allow + warn-log.
+- Architecture: middleware future is `'static`, so the inner service is stored as `Arc<S>` (needs `S: 'static`, not `S: Clone`); `RateLimiter` is a single concrete type over `Arc<dyn WindowCounter>` (object-safe `CounterFuture`) so `app_data` lookups always match; an injectable `NowFn` clock makes fixed-window rollover deterministic in tests.
+- Unit tests same-file (24): key/classification/decision math, deplete-then-429, budget holds until `Retry-After - 1`, window resets after elapse, fail-open paths, degraded pass-through, excluded paths never hit the backend.
+
+### Security note
+- Auth-class budgets slow credential brute-force; per-IP buckets keyed on socket peer by default.
+
+## [0.4.0] — 2026-08-26 — player feedback endpoint (task 0.4.7)
+
+### Added
+- `POST /v1/feedback` — auth-gated player feedback submission. Body `{ "message": <text> }` with unknown fields rejected; trimmed message must be 1..=1000 chars (`MAX_MESSAGE_CHARS`, socket-chat gate precedent) and its JSON-encoded payload ≤ 4 KiB (`MAX_PROPS_BYTES`, events precedent — escape-heavy control-char input can trip the encoded cap while remaining length-valid). Stored verbatim after trimming.
+- Storage reuses the append-only `analytics_events` table (task 0.4.5): one row per submission with `name = "feedback"` and `props = { "message": ... }` — no new migration; a dedicated table stays a Phase 1.0 candidate (recorded in `docs/memory.md`).
+- Honest-failure contract (deliberate divergence from fire-and-forget events): a post-validation database failure answers `500 {"error": "internal error"}` with details logged server-side only — user content must never be silently dropped. Success: `201 Created {"received": true}`.
+- Best-effort attribution: unknown/deleted callers (or a failing resolution query) store anonymous rows (`player_id NULL`) rather than failing — account state never loses feedback text.
+- `src/services/feedback.rs` — `submit_feedback`, pure pre-SQL `validate`, `FeedbackServiceError` (`Invalid`/`Database`); static `.bind()`-only INSERT into `analytics_events`.
+- `src/api/feedback.rs` — single canonical `/v1/feedback` route (no legacy alias, post-0.4.1 precedent); guard order cheapest-first (auth 401 → pool 503 → validation 400 → insert).
+- Unit tests same-file (API 10 + service 7) + `tests/feedback_integration.rs` (5 `#[ignore]`d live-stack tests incl. deleted-player anonymous storage and writes-nothing-on-reject).
+- Wired into `src/{api,services}/mod.rs` and `src/main.rs`.
+
+### Security note
+- Authenticated-only submission; length + encoded-size caps bound per-request abuse until rate limiting lands (task 0.4.8).
+
+## [0.4.0] — 2026-08-26 — analytics events ingest endpoint (task 0.4.6)
+
+### Added
+- `POST /v1/events` — auth-gated batched analytics-event ingest (fire-and-forget). Body is a bare JSON array `[{"name", "props"?}, ...]` validated whole-batch before any SQL: non-empty, ≤100 events (`MAX_BATCH_EVENTS`), trimmed `name` 1..=64 chars matching `VARCHAR(64)`, serialized `props` ≤ 4 KiB mirroring the leaderboards cap; unknown per-event fields rejected at deserialization; no client timestamps (`created_at` DB-stamped, append-only).
+- Fire-and-forget contract: accepted batches answer `202 Accepted {"accepted": n}` after one batched multi-row INSERT; any post-validation database failure is logged (`tracing::error!`) but still answered 202 — telemetry loss must never block clients. Pool absent → 503 (degraded-mode precedent).
+- Best-effort player attribution: JWT identity resolves to the internal `players.id`; unknown/deleted callers store anonymous rows (`player_id NULL`) rather than failing — account state never breaks intake.
+- `src/entities/analytics_event.rs` — `AnalyticsEventRow` insert-shape struct; deliberately no `FromRow`/View (the table is write-only in v0 and never selected).
+- `src/services/events.rs` — `ingest_events` + pure pre-SQL `validate_batch`, `MAX_BATCH_EVENTS`/`MAX_EVENT_NAME_LEN`/`MAX_PROPS_BYTES` caps, `EventsServiceError` (`Invalid`/`Database`). Batched INSERT uses `sqlx::QueryBuilder::push_values` — placeholder scaffolding only, every value bound.
+- `src/api/events.rs` — single canonical `/v1/events` route (no legacy alias, post-0.4.1 precedent); guard order cheapest-first (auth 401 → pool 503 → validation 400 → insert).
+- Unit tests (entity/service/API same-file, incl. dead-DB-still-202 proof) + `tests/events_integration.rs` (10 `#[ignore]`d live-stack tests: attribution, batch atomicity, NULL props, exact-limit boundary, deleted-player anonymization).
+- Wired into `src/{api,services,entities}/mod.rs` and `src/main.rs`.
+
+### Security note
+- Authenticated-only ingest; per-request cost bounded by caps (~400 KiB worst case) until rate limiting lands (task 0.4.8).
+
+## [0.4.0] — 2026-08-26 — analytics events schema (task 0.4.5)
+
+### Added
+- `migrations/20260826000002_create_analytics_events.up.sql` — `analytics_events` append-only event log: auto-increment internal id, nullable `player_id` FK to `players` with **ON DELETE SET NULL** (deleting a player must never erase their events — CASCADE would break append-only semantics), free-form `name VARCHAR(64)` event key, optional JSON `props` payload, `created_at`. No `updated_at` and no `public_id`: rows are never updated and clients never address a stored event (write-only ingest in v0). Schema stays deliberately generic (`name` + JSON) — typed event schema is an open question deferred to Phase 1.0; upstream Talo's event shape is undocumented in this repo so no upstream-specific columns were guessed. `props` size cap is enforced at the API layer (task 0.4.6); MySQL JSON columns cannot be size-bounded in schema. Indexes kept minimal for a high-write log: `(player_id)` and `(name, created_at)`.
+- `migrations/20260826000002_create_analytics_events.down.sql` — reversible drop.
+- `docs/todo-v1.md` — task 0.4.5 marked done with done-note.
+
+## [0.4.0] — 2026-08-26 — per-game settings endpoints (task 0.4.4)
+
+### Added
+- `GET /v1/games/{game_id}/settings` — auth-gated read of one game's stored JSON config; unknown game → 404. No legacy alias mount (route created after the 0.4.1 prefix-parity pass; `/v1/socket-tickets` precedent).
+- `PUT /v1/games/{game_id}/settings` — auth-gated create-or-replace of one game's config via a parameterized upsert keyed on the unique `game_id` route identifier (`created_at` preserved; MySQL maintains `updated_at`). Returns the stored view (200) either way.
+- `src/entities/game_setting.rs` — `GameSettingView` (camelCase `gameId`/`config`/`createdAt`/`updatedAt`) + internal `GameSettingRow` (`FromRow`; internal BIGINT id never selected/exposed).
+- `src/services/game_settings.rs` — `get_settings`/`put_settings`, pre-SQL validation (trimmed `game_id` 1..=64 chars matching `VARCHAR(64)`; config not JSON-null; serialized size ≤ `MAX_CONFIG_BYTES` = 32 KiB, mirroring the saves cap), and `GameSettingsServiceError` (`NotFound`/`Invalid`/`Database`).
+- `src/api/game_settings.rs` — handlers + single canonical `/v1/games` scope; body wrapper `{ "config": <any> }` rejects unknown top-level fields while keeping the inner config arbitrary JSON. Error mapping: invalid → 400, unknown → 404, pool absent → 503.
+- Unit tests (entity/service/API same-file) + `tests/game_settings_integration.rs` (10 `#[ignore]`d live-stack tests incl. the milestone round-trip, upsert-preserves-`created_at`, and the 64-char `VARCHAR(64)` boundary checks).
+- Wired into `src/{api,services,entities}/mod.rs` and `src/main.rs`.
+
+### Security note
+- PUT is authenticated-only with no ownership/admin scoping yet (no `games` table exists); any valid JWT may write any game's config — v0 trade-off recorded in `docs/memory.md`, revisit when games/scopes land.
+
+## [0.4.0] — 2026-08-26 — game settings schema (task 0.4.3)
+
+### Added
+- `migrations/20260826000001_create_game_settings.up.sql` — `game_settings` table: one row per game via unique `game_id` (`VARCHAR(64)`, the opaque route identifier, mirroring the leaderboards' `internal_name` convention — no `games` table exists yet so no FK), NOT NULL JSON `config` blob, `created_at`/`updated_at`. Config size cap is enforced at the API layer (task 0.4.4); MySQL JSON columns cannot be size-bounded in schema.
+- `migrations/20260826000001_create_game_settings.down.sql` — reversible drop.
+- `docs/todo-v1.md` — task 0.4.3 marked done with done-note.
+
+## [0.4.0] — 2026-08-26 — upstream domain-model structs (task 0.4.2)
+
+### Added
+- `src/entities/prop.rs` — shared `Prop { key, value }` pair used across every upstream entity.
+- `src/entities/player_auth.rs` — `PlayerAuth` (email / `verificationEnabled` / `sessionCreatedAt`); unit-tested to never carry credential material.
+- `src/entities/player_alias.rs` — full `PlayerAlias` + nested `PlayerRef` projection (public UUID id, props, devBuild, optional auth); deserialization verified against real game-channel API fixtures; circular upstream `Player.aliases` omitted by design.
+- `src/entities/game_channel.rs` — `GameChannel` (nullable owner alias, counts, props, `autoCleanup`, `"private"`) and `GameChannelLeavingReason` with hand-written integer serde matching the TS numeric enum.
+- `src/entities/leaderboard.rs` — `LeaderboardSortMode` (`"asc"`/`"desc"`) and a full upstream-parity `LeaderboardEntry` (0-based position, float score, nested alias, hidden flag, entry-level `props`) added **alongside** the existing implemented view structs, which are unchanged.
+- 20 new unit tests covering camelCase wire shapes, upstream fixture round-trips, empty-prop omission, unknown-value rejection, and the no-password invariant.
+
+### Changed
+- `docs/TALO_API.md` — new "Domain models (upstream parity)" section documenting the verified shapes, Rust mappings, and deliberate divergences (f64 score vs BIGINT storage, Option timestamps, unmodelled `groups`/circular refs); first "Remaining TODOs" bullet ticked off. Section-scoped edit only — endpoint-section updates remain owned by task 0.4.13.
+
+## [0.4.0] — 2026-08-26 — `/v1` route-prefix parity with legacy aliases (task 0.4.1)
+
+### Changed
+- `src/api/{auth,players,leaderboards,saves}.rs` — the four gameplay route groups are now mounted at their canonical upstream-prefixed paths (`/v1/auth`, `/v1/players`, `/v1/leaderboards`, `/v1/saves`) **and** keep their legacy unprefixed paths (`/auth`, `/players`, `/leaderboards`, `/saves`) as aliases during the transition. Each module extracts a private `scoped(prefix)` builder so both mounts share one route definition (zero drift); `config` signatures unchanged, so `main.rs` needs no edit. `/healthz`, `/ws` and `/v1/socket-tickets` are unchanged.
+- Route tables and section banners in the four modules' doc comments updated to canonical `/v1/...` paths; stale path references in `src/services/auth.rs` / `src/services/players.rs` doc comments refreshed.
+
+### Added
+- Unit tests: per-module legacy-alias routing tests (auth register/login 503-without-pool via alias, players 401/400, leaderboards 401/403, saves 401/403) proving the unprefixed mounts stay wired.
+- Integration tests: `register_via_legacy_path_still_works` + `login_via_legacy_path_still_works` (auth), `get_player_via_legacy_path_still_works` (players), `submit_entry_via_legacy_path_still_works` (leaderboards — submit via legacy, read back via `/v1`, proving shared state), `save_roundtrip_via_legacy_paths_still_works` (saves — create/delete legacy, list canonical). All existing flows repointed to `/v1/...`.
+
 ## [Unreleased] — 2026-08-25 — document leaderboard, save & WS shapes (task 0.3.17)
 
 ### Changed

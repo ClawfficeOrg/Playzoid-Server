@@ -215,3 +215,140 @@ PHASE_BLOCKED: 0.3 review failed after 3 attempts. See /tmp/ralph-line-review-0.
 ## 2026-08-25 23:4x
 
 PHASE_COMPLETE: 0.3 merged to main; tagged v0.3.0. Release review performed manually (checklist 6/6 PASS) after RELEASE_REVIEW_AGENT was blocked by Copilot org policy.
+
+## 2026-08-26 — task/0.4.1 run log
+
+- Implemented `/v1` route-prefix parity: `auth`, `players`, `leaderboards`,
+  `saves` now mount canonical `/v1/<group>` scopes plus legacy unprefixed
+  aliases via a shared per-module `scoped(prefix)` builder (single route
+  definition, no drift). `main.rs` untouched (config signatures unchanged).
+- Unit tests: repointed to `/v1/*`, added legacy-alias routing tests per module.
+- Integration tests: all flows repointed to `/v1/*`; added one legacy-path
+  test per suite (auth register+login, players get, leaderboards submit-then-
+  read-across-mounts, saves create/list/delete roundtrip).
+- Doc-comment-only path refreshes in `src/services/auth.rs` and
+  `src/services/players.rs` (no other active-task owner; comment-only).
+- Known staleness: `docs/TALO_API.md` still describes pre-parity prefixes and
+  the Phase 0.2 decision note at its end. NOT edited here — file is owned by
+  tasks 0.4.2 / 0.4.13; recorded instead of edited to avoid cross-task edits.
+
+## 2026-08-26 05:50
+
+DONE: 0.4.1 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.2 (branch task/0.4.2)
+
+DONE (implementation; no commit/PR per session instructions):
+- `src/entities/`: new `prop.rs`, `player_auth.rs`, `player_alias.rs`,
+  `game_channel.rs`; `leaderboard.rs` gains `LeaderboardSortMode` + full
+  upstream-parity `LeaderboardEntry` beside the untouched view structs;
+  modules registered in `mod.rs`.
+- Shapes re-verified live against docs.trytalo.com (sockets/responses,
+  leaderboard-api, game-channel-api). Two plan refinements recorded in
+  docs/memory.md: `GameChannel.owner` = full `Option<PlayerAlias>` (no
+  recursion, so the provisional AliasSummary is unnecessary), and alias
+  timestamps `Option` (leaderboard samples omit them).
+- 20 new entity unit tests; security invariant (no password material in
+  PlayerAuth/PlayerAlias) pinned by tests.
+- Docs: TALO_API.md "Domain models (upstream parity)" section + ticked its
+  Remaining-TODOs bullet only (endpoint sections stay owned by 0.4.13);
+  CHANGES.md + memory.md entries.
+- Gate: cargo fmt --check / clippy -D warnings / cargo test all green
+  (163 lib tests passed).
+
+## 2026-08-26 06:22
+
+DONE: 0.4.2 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.3 (branch task/0.4.3)
+
+DONE (implementation; no commit/PR per session instructions):
+- `migrations/20260826000001_create_game_settings.{up,down}.sql` — per-game
+  JSON config table. `game_id VARCHAR(64)` unique (opaque route id, mirrors
+  leaderboards' `internal_name`; no `games` table exists to FK),
+  `config JSON NOT NULL`, timestamps. No DB-level size cap — MySQL JSON
+  columns cannot be size-bounded in schema; cap is API-layer, owned by 0.4.4
+  (same split as leaderboards props ≤ 4 KB).
+- Docs: CHANGES.md entry + todo-v1.md done-note. ralph-log ride-along note:
+  working tree already carried an uncommitted 0.4.2 log line; left intact.
+- Verification: reversibility exercised locally with sqlx-cli against a
+  throwaway mysql:8.0 schema — full up set applies (ours last; timestamp
+  prefix sorts last lexicographically) and a single revert drops exactly
+  `game_settings`, leaving earlier migrations intact. Correction from
+  self-review: the CI `sqlx-migrate` job (.github/workflows/ci.yml) would run
+  the same sequence, but the workflow is `workflow_dispatch`-only (disabled)
+  and the job is `continue-on-error: true` — it is not an automated gate.
+  Real table exercise deferred to 0.4.12 settings integration tests.
+- Gate: cargo fmt --check / clippy -D warnings / cargo test all green.
+
+## 2026-08-26 06:33
+
+DONE: 0.4.3 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.4 (game settings endpoints)
+
+DONE (implementation; no commit/PR per session instructions):
+- `src/entities/game_setting.rs` (new): `GameSettingRow` (FromRow, pub(crate),
+  internal BIGINT id never selected) + `GameSettingView` (camelCase
+  gameId/config/createdAt/updatedAt) + same-file tests.
+- `src/services/game_settings.rs` (new): `get_settings` / `put_settings`;
+  pre-SQL validation (trimmed game_id 1..=64 chars matching VARCHAR(64),
+  config non-null, serialized ≤ MAX_CONFIG_BYTES 32 KiB mirroring the saves
+  cap); parameterized upsert (`INSERT … ON DUPLICATE KEY UPDATE config = ?`,
+  value bound twice) + read-back; read-back trims game_id symmetrically with
+  PUT so GET addresses the exact row a PUT created; error enum
+  NotFound/Invalid/Database.
+- `src/api/game_settings.rs` (new): single canonical `/v1/games` scope,
+  GET+PUT on `/{game_id}/settings`. No legacy alias mount (route is new after
+  the 0.4.1 parity pass; `/v1/socket-tickets` precedent). Body wrapper
+  `{ "config": <any> }` rejects unknown top-level fields at deserialization;
+  auth via AuthenticatedUser (401 pre-body), pool-absent → 503.
+- Wired: `src/{api,services,entities}/mod.rs` (alphabetical), `main.rs`
+  configure after saves. Integration suite `tests/game_settings_integration.rs`
+  (10 tests, all #[ignore], Docker dev stack) — owned-path note: `tests/` is
+  nominally 0.4.12's gap-fill owner; each endpoint task has shipped its own
+  suite since 0.3.x, flagged here and in the todo done-note.
+- Docs: CHANGES.md entry, memory.md decision entry (extension-not-parity,
+  upsert semantics, 32 KiB cap choice, any-JWT-writes trade-off until
+  games/scopes land), todo-v1.md 0.4.4 marked done with note.
+- Gate: cargo fmt --check / clippy -D warnings / cargo test all green
+  (178 unit passed; new integration tests ignored as designed).
+
+## 2026-08-26 06:53
+
+DONE: 0.4.4 merged into release/v0.4.
+
+## 2026-08-26 — task 0.4.5 (analytics_events migration)
+
+DONE (implementation; no commit/PR per session instructions):
+- `migrations/20260826000002_create_analytics_events.{up,down}.sql` (new):
+  append-only event log. No `updated_at` / no `public_id` (rows never
+  updated, clients never address stored events). `player_id` nullable FK
+  ON DELETE SET NULL — player deletion must not erase event history
+  (CASCADE would break append-only semantics). Generic `name VARCHAR(64)`
+  + JSON `props`: upstream Talo event shape undocumented in repo (grep:
+  zero matches in TALO_API*.md), typed schema deferred to Phase 1.0 per
+  memory.md Open Question #6 — no columns guessed.
+- Indexes minimal for high-write log: `(player_id)`,
+  `(name, created_at)`. Props size cap deferred to API layer (0.4.6),
+  same split as leaderboards ≤ 4 KB rule.
+- Docs: CHANGES.md entry, memory.md decision entry, todo-v1.md 0.4.5
+  marked done with note.
+- Scope discipline: did NOT pre-create src/entities/analytics_event.rs
+  (0.4.6's owned path) despite it being the natural next want.
+
+## 2026-08-26 07:02
+
+DONE: 0.4.5 merged into release/v0.4.
+
+## 2026-08-26 07:33
+
+DONE: 0.4.6 merged into release/v0.4.
+
+## 2026-08-26 07:46
+
+DONE: 0.4.7 implemented on task/0.4.7 — POST /v1/feedback. Feedback stored as name="feedback" rows in the existing append-only analytics_events table (owned paths exclude migrations/entities; sink-reuse decision + dedicated-table Phase 1.0 candidate recorded in memory.md). Honest-failure contract: post-validation DB failure → 500 (divergence from fire-and-forget events, user content must not be silently dropped). Pre-SQL validation: trimmed message 1..=1000 chars, encoded props ≤4KiB. Best-effort attribution, static bound INSERT. Unit tests API 10 + service 7 same-file; tests/feedback_integration.rs 5 #[ignore] (live Docker stack). Wired mods + main.rs one-liner outside owned paths (same accepted deviation as 0.4.4/0.4.6). cargo fmt/clippy/test green (215 passed). No commit/PR per session instructions.
+
+## 2026-08-26 07:55
+
+DONE: 0.4.7 merged into release/v0.4.
