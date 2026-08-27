@@ -1,0 +1,15 @@
+# cargo audit configuration (task 0.4.11 — audit gates CI).
+#
+# Advisory ignores carry a mandatory rationale. Ignored advisories are
+# tracked; revisit on every dependency bump.
+[advisories]
+ignore = [
+    # h2 unbounded empty DATA frames — no fix in the h2 0.3.x line, and
+    # actix-web 4.x pins h2 ^0.3 via actix-http 3.x. Tracked: migrate to
+    # actix-web 5 once it supports h2 0.4+.
+    "RUSTSEC-2026-0258",
+    # rsa Marvin Attack (timing sidechannel) — no upstream fix. Only reachable
+    # via sqlx-mysql's password auth path; mitigated in production by using
+    # TLS to MySQL (see docs/RECOVERY_PLAN.md loop-blockers entry).
+    "RUSTSEC-2023-0071",
+]
