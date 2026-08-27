@@ -2,7 +2,21 @@
 
 # CHANGES.md
 
-## [Unreleased] — 2026-08-27 — metrics, OpenAPI, audit gating, tests, API docs (tasks 0.4.9-0.4.13)
+## [0.4.0] — 2026-08-27 — Analytics, Config, Feedback & Production Hardening
+
+Release of the full Phase 0.4 line (tasks 0.4.1–0.4.13). Highlights:
+
+- **Route prefix parity** (0.4.1): canonical `/v1` mounts for auth, players, leaderboards and saves, with legacy unprefixed aliases during the transition.
+- **Full domain-model structs** (0.4.2) lifted from verified upstream shapes; **game settings** schema + GET/PUT endpoints (0.4.3/0.4.4); **analytics events** schema + `POST /v1/events` fire-and-forget ingest (0.4.5/0.4.6); **`POST /v1/feedback`** with honest-failure semantics (0.4.7).
+- **Redis fixed-window rate limiting** (0.4.8): per-`(class, ip, window)` buckets, auth + default budgets, fail-open degraded mode, `429` with `Retry-After`/`X-RateLimit-*` headers.
+- **Prometheus `/metrics`** (0.4.9): request counters/histograms, WS connection gauge, DB pool gauges.
+- **OpenAPI `/openapi.json`** (0.4.10): generated from a single route table; CI fails on drift.
+- **Gated `cargo audit`** (0.4.11) with a documented ignore list; **live-stack rate-limit integration tests** (0.4.12); **`docs/TALO_API.md`** updated to the `/v1` surface (0.4.13).
+- New deps: `prometheus` 0.14, `utoipa` 5.5; `validator` bumped to 0.20; `actix-web` 4.15 / `actix-http` 3.13.
+
+Per-task detail sections follow.
+
+## [0.4.0] — 2026-08-27 — metrics, OpenAPI, audit gating, tests, API docs (tasks 0.4.9-0.4.13)
 
 ### Added
 - `GET /metrics` (task 0.4.9) — Prometheus text exposition: per-request counters/histograms by method+status (`playzoid_http_requests_total`, `playzoid_http_request_duration_seconds`), a WebSocket connection gauge (`playzoid_ws_connections`, maintained on WS start/stop), and live DB pool gauges (`playzoid_db_pool_connections{state=size|idle|in_use}`) sampled at scrape time. The `/metrics` route never records itself. `prometheus` 0.14 added.
@@ -14,7 +28,7 @@
 ### Security note
 - `cargo audit` is now a CI gate; the two ignored advisories (`h2` RUSTSEC-2026-0258, `rsa` RUSTSEC-2023-0071) are documented with rationale and tracked for the actix-web 5 / TLS mitigations.
 
-## [Unreleased] — 2026-08-26 — Redis-backed rate limiting (task 0.4.8)
+## [0.4.0] — 2026-08-26 — Redis-backed rate limiting (task 0.4.8)
 
 ### Added
 - Fixed-window rate limiting on public routes (`src/middleware/rate_limit.rs`): one Redis bucket per `(class, client ip, window_start)` key, incremented by an atomic `EVAL` `INCR`+`EXPIRE`+`TTL` script so limits hold across workers/instances. Registered globally; enforcement scoped internally to configured public prefixes (`/v1/auth`, `/auth`, `/ws` by default; `/healthz` never limited).
@@ -27,7 +41,7 @@
 ### Security note
 - Auth-class budgets slow credential brute-force; per-IP buckets keyed on socket peer by default.
 
-## [Unreleased] — 2026-08-26 — player feedback endpoint (task 0.4.7)
+## [0.4.0] — 2026-08-26 — player feedback endpoint (task 0.4.7)
 
 ### Added
 - `POST /v1/feedback` — auth-gated player feedback submission. Body `{ "message": <text> }` with unknown fields rejected; trimmed message must be 1..=1000 chars (`MAX_MESSAGE_CHARS`, socket-chat gate precedent) and its JSON-encoded payload ≤ 4 KiB (`MAX_PROPS_BYTES`, events precedent — escape-heavy control-char input can trip the encoded cap while remaining length-valid). Stored verbatim after trimming.
@@ -42,7 +56,7 @@
 ### Security note
 - Authenticated-only submission; length + encoded-size caps bound per-request abuse until rate limiting lands (task 0.4.8).
 
-## [Unreleased] — 2026-08-26 — analytics events ingest endpoint (task 0.4.6)
+## [0.4.0] — 2026-08-26 — analytics events ingest endpoint (task 0.4.6)
 
 ### Added
 - `POST /v1/events` — auth-gated batched analytics-event ingest (fire-and-forget). Body is a bare JSON array `[{"name", "props"?}, ...]` validated whole-batch before any SQL: non-empty, ≤100 events (`MAX_BATCH_EVENTS`), trimmed `name` 1..=64 chars matching `VARCHAR(64)`, serialized `props` ≤ 4 KiB mirroring the leaderboards cap; unknown per-event fields rejected at deserialization; no client timestamps (`created_at` DB-stamped, append-only).
@@ -57,14 +71,14 @@
 ### Security note
 - Authenticated-only ingest; per-request cost bounded by caps (~400 KiB worst case) until rate limiting lands (task 0.4.8).
 
-## [Unreleased] — 2026-08-26 — analytics events schema (task 0.4.5)
+## [0.4.0] — 2026-08-26 — analytics events schema (task 0.4.5)
 
 ### Added
 - `migrations/20260826000002_create_analytics_events.up.sql` — `analytics_events` append-only event log: auto-increment internal id, nullable `player_id` FK to `players` with **ON DELETE SET NULL** (deleting a player must never erase their events — CASCADE would break append-only semantics), free-form `name VARCHAR(64)` event key, optional JSON `props` payload, `created_at`. No `updated_at` and no `public_id`: rows are never updated and clients never address a stored event (write-only ingest in v0). Schema stays deliberately generic (`name` + JSON) — typed event schema is an open question deferred to Phase 1.0; upstream Talo's event shape is undocumented in this repo so no upstream-specific columns were guessed. `props` size cap is enforced at the API layer (task 0.4.6); MySQL JSON columns cannot be size-bounded in schema. Indexes kept minimal for a high-write log: `(player_id)` and `(name, created_at)`.
 - `migrations/20260826000002_create_analytics_events.down.sql` — reversible drop.
 - `docs/todo-v1.md` — task 0.4.5 marked done with done-note.
 
-## [Unreleased] — 2026-08-26 — per-game settings endpoints (task 0.4.4)
+## [0.4.0] — 2026-08-26 — per-game settings endpoints (task 0.4.4)
 
 ### Added
 - `GET /v1/games/{game_id}/settings` — auth-gated read of one game's stored JSON config; unknown game → 404. No legacy alias mount (route created after the 0.4.1 prefix-parity pass; `/v1/socket-tickets` precedent).
@@ -78,14 +92,14 @@
 ### Security note
 - PUT is authenticated-only with no ownership/admin scoping yet (no `games` table exists); any valid JWT may write any game's config — v0 trade-off recorded in `docs/memory.md`, revisit when games/scopes land.
 
-## [Unreleased] — 2026-08-26 — game settings schema (task 0.4.3)
+## [0.4.0] — 2026-08-26 — game settings schema (task 0.4.3)
 
 ### Added
 - `migrations/20260826000001_create_game_settings.up.sql` — `game_settings` table: one row per game via unique `game_id` (`VARCHAR(64)`, the opaque route identifier, mirroring the leaderboards' `internal_name` convention — no `games` table exists yet so no FK), NOT NULL JSON `config` blob, `created_at`/`updated_at`. Config size cap is enforced at the API layer (task 0.4.4); MySQL JSON columns cannot be size-bounded in schema.
 - `migrations/20260826000001_create_game_settings.down.sql` — reversible drop.
 - `docs/todo-v1.md` — task 0.4.3 marked done with done-note.
 
-## [Unreleased] — 2026-08-26 — upstream domain-model structs (task 0.4.2)
+## [0.4.0] — 2026-08-26 — upstream domain-model structs (task 0.4.2)
 
 ### Added
 - `src/entities/prop.rs` — shared `Prop { key, value }` pair used across every upstream entity.
@@ -98,7 +112,7 @@
 ### Changed
 - `docs/TALO_API.md` — new "Domain models (upstream parity)" section documenting the verified shapes, Rust mappings, and deliberate divergences (f64 score vs BIGINT storage, Option timestamps, unmodelled `groups`/circular refs); first "Remaining TODOs" bullet ticked off. Section-scoped edit only — endpoint-section updates remain owned by task 0.4.13.
 
-## [Unreleased] — 2026-08-26 — `/v1` route-prefix parity with legacy aliases (task 0.4.1)
+## [0.4.0] — 2026-08-26 — `/v1` route-prefix parity with legacy aliases (task 0.4.1)
 
 ### Changed
 - `src/api/{auth,players,leaderboards,saves}.rs` — the four gameplay route groups are now mounted at their canonical upstream-prefixed paths (`/v1/auth`, `/v1/players`, `/v1/leaderboards`, `/v1/saves`) **and** keep their legacy unprefixed paths (`/auth`, `/players`, `/leaderboards`, `/saves`) as aliases during the transition. Each module extracts a private `scoped(prefix)` builder so both mounts share one route definition (zero drift); `config` signatures unchanged, so `main.rs` needs no edit. `/healthz`, `/ws` and `/v1/socket-tickets` are unchanged.
