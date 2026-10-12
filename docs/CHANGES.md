@@ -16,6 +16,19 @@ Release of the full Phase 0.4 line (tasks 0.4.1–0.4.13). Highlights:
 
 Per-task detail sections follow.
 
+## [Unreleased] — 2026-10-12 — dependency bump: clear RUSTSEC-2026-0285
+
+### Fixed
+- `cargo audit` is clean again after the advisory database advanced past the
+  last dependency bump. Lockfile-only update: `rustls` 0.23.40 → 0.23.45
+  (plus `rustls-webpki` 0.103.13 → 0.103.15), which clears
+  **RUSTSEC-2026-0285** (TLS 1.3 handshake messages incorrectly accepted
+  across encryption-level boundaries, medium, fixed in `>=0.23.45`).
+  Reached via `sqlx-sqlite` → `sqlx-core`; no `Cargo.toml` change required
+  and no other versions moved. The four remaining advisories are
+  non-gating warnings with documented policy (`anyhow`,
+  `event-listener`, `chacha20`, `spin`).
+
 ## [0.4.0] — 2026-08-27 — metrics, OpenAPI, audit gating, tests, API docs (tasks 0.4.9-0.4.13)
 
 ### Added
