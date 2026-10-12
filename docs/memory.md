@@ -809,10 +809,10 @@ protection.
 
 **Incident:** `.env` was committed in `a778497` and has been present in every
 branch and all four tags ever since. The repository is **public**, and the file
-contained a real `JWT_SECRET`
-(`2a76c268…c39b`) — i.e. the HS256 key that signs all auth tokens. Anyone with
-that value can forge a valid JWT for any player id. GitHub secret scanning is
-**disabled** on this repository, so nothing ever alerted.
+contained a real `JWT_SECRET` (a 64-hex-character HS256 signing key) — i.e. the
+key that signed all auth tokens. Anyone with that value could forge a valid JWT
+for any player id. The value has since been rotated and is not reproduced here.
+GitHub secret scanning was **disabled** on this repository, so nothing alerted.
 
 **Blast radius:** committed on `main`, `release/v0.3`, `release/v0.4` and all
 `task/*` branches; contained in tags `v0.2.0`, `v0.3.0`, `v0.4.0`, `v0.4.1`.
