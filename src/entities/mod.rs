@@ -1,8 +1,14 @@
 //! Database entity / domain model definitions.
 //!
-//! Concrete types land here as Phase 0.2 introduces persistence
-//! (Player, PlayerAlias, etc. — see `docs/TALO_API.md`).
+//! Concrete types land here as persistence and upstream-parity modelling
+//! progress (see `docs/TALO_API.md`).
 
+pub mod analytics_event;
+pub mod game_channel;
+pub mod game_setting;
 pub mod leaderboard;
 pub mod player;
+pub mod player_alias;
+pub mod player_auth;
+pub mod prop;
 pub mod save;

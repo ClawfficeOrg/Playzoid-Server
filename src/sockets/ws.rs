@@ -257,6 +257,7 @@ impl Actor for WsConn {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
+        crate::middleware::metrics::metrics().ws_connected();
         self.conn_key = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
         if self.alias_id.is_none() {
             // Reject unauthenticated connections with the Talo error envelope.
@@ -270,6 +271,7 @@ impl Actor for WsConn {
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        crate::middleware::metrics::metrics().ws_disconnected();
         if let Some(LeavePresence { alias_id, conn_key }) = self.leave_presence() {
             presence::hub().do_send(LeavePresence { alias_id, conn_key });
             channels::hub().do_send(LeaveAllChannels { conn_key });

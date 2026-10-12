@@ -5,6 +5,10 @@
 
 pub mod auth;
 pub mod cache;
+pub mod events;
+pub mod feedback;
+pub mod game_settings;
 pub mod leaderboards;
 pub mod players;
+pub mod redis;
 pub mod saves;

@@ -370,6 +370,502 @@ today's behavior; group resolution never fails a connection.
 
 ---
 
+## 2026-08-26 — `/v1` route-prefix parity via dual-mount aliases (task 0.4.1)
+
+**Decision:** the four gameplay route groups (`auth`, `players`, `leaderboards`,
+`saves`) are mounted at both the canonical upstream-prefixed path
+(`/v1/<group>`, matching Talo) and the legacy unprefixed path (`/<group>`)
+during the transition. Each module builds its routes once in a private
+`scoped(prefix)` helper and `config` registers the scope twice, so the two
+mounts cannot drift; the public `config(&mut web::ServiceConfig)` signatures
+are unchanged and `main.rs` is untouched.
+
+**Rationale:** upstream parity (task 0.4.1) without breaking existing clients
+in one step. The legacy alias removal is deliberately deferred to a later
+hardening task — when it happens, only the second `.service(scoped(...))`
+call per module plus the alias tests need deleting.
+
+**Deliberately unprefixed (infra, not part of the upstream API surface):**
+`/healthz` and `/ws`. `/v1/socket-tickets` already carried the prefix.
+
+**Consequences:**
+- The routed surface temporarily includes both spellings of every gameplay
+  endpoint — documented intent for the transition window.
+- Legacy-alias coverage lives in dedicated tests (unit + integration) so the
+  eventual removal is a visible, test-driven change.
+- `docs/TALO_API.md` still describes the pre-parity prefixes; its update is
+  owned by task 0.4.13 (noted in `docs/ralph-log.md`).
+
+---
+
+## 2026-08-26 — Upstream domain-model struct lift (task 0.4.2)
+
+**Context:** task 0.4.2 asks for full serde structs for `PlayerAlias`,
+`PlayerAuth`, `GameChannel`, and the complete `LeaderboardEntry` (incl.
+upstream `props`). `docs/TALO_API_STRUCTS.md` only catalogues request bodies,
+so the domain shapes were re-verified against the live upstream docs:
+docs.trytalo.com `/docs/sockets/responses` (canonical types: `Prop`,
+`Player`, `PlayerAlias`, `GameChannel`, `GameChannelLeavingReason`),
+`/docs/http/leaderboard-api` (entry samples: float score, 0-based
+`position`, nested alias *without* timestamps), and
+`/docs/http/game-channel-api` (`owner: null` for system channels,
+`autoCleanup` / `private` flags, alias payloads *with* timestamps).
+
+**Decisions:**
+- New modules under `src/entities/`: `prop.rs` (shared key/value pair),
+  `player_auth.rs`, `player_alias.rs` (with nested `PlayerRef`),
+  `game_channel.rs`; `leaderboard.rs` gains `LeaderboardSortMode` plus a full
+  upstream-parity `LeaderboardEntry` **alongside** — never replacing — our
+  implemented `LeaderboardEntryView`, so wire compatibility is untouched.
+- `GameChannel.owner` uses the full `Option<PlayerAlias>` rather than a
+  summary struct: live samples show owner is a complete alias and there is
+  no recursion cycle (alias → player → auth), so full parity costs nothing.
+- Alias-level timestamps are `Option<DateTime<Utc>>`: channel payloads carry
+  them but leaderboard-entry samples omit them; liberal acceptance keeps
+  both real fixtures deserializable.
+- `LeaderboardEntry.score` is `f64` (upstream samples are floats, e.g.
+  `593.21`) while our persisted schema stays `BIGINT i64`; conversion
+  belongs to the future service layer. `position: u64` mirrors upstream's
+  0-based index; our views keep their 1-based `rank`.
+- `GameChannelLeavingReason` gets hand-written integer serde: serde variant
+  `rename` would emit JSON strings (`"0"`), upstream emits bare integers.
+  Matches the manual-decode precedent set by `PlayerStatus`.
+- Upstream's circular `Player.aliases` back-reference is omitted;
+  `Player.groups` is not modelled until player-group persistence exists.
+
+**Consequences:**
+- Purely additive data structs; no handler/service/socket changes, so every
+  existing response shape stays byte-compatible.
+- Security invariant pinned in unit tests: neither `PlayerAuth` nor
+  `PlayerAlias` can serialize credential material (`password_hash` remains
+  on the internal `players` row only).
+- When channel/analytics endpoints land later in 0.4, these structs are the
+  ready-made parity targets instead of new ad-hoc shapes.
+
+---
+
+## 2026-08-26 — `game_settings`: opaque route id, no FK until a games table exists (task 0.4.3)
+
+**Context:** task 0.4.3 adds the `game_settings` table backing
+`GET/PUT /v1/games/{game_id}/settings`. Upstream addresses games by an opaque
+route id, but Playzoid v0 has no `games` table yet, so the column cannot
+foreign-key anywhere.
+
+**Options considered:**
+- Wait for a `games` table and add the FK then — blocks settings work behind
+  an unscoped task.
+- Invent a minimal `games` table in this task — scope creep beyond owned
+  paths (`migrations/`) and guesses at a schema no task specifies.
+- Store the route id directly with a unique constraint, no FK (chosen).
+
+**Decision:** `game_id VARCHAR(64) NOT NULL UNIQUE` holds the opaque route
+identifier, mirroring the leaderboards' `internal_name` convention; the
+internal BIGINT id never leaves the server (players/game_saves precedent).
+`config JSON NOT NULL` carries arbitrary per-game configuration, one row per
+game via the unique constraint. Size capping is deliberately not in-schema —
+MySQL JSON columns cannot be size-bounded — and belongs to the API layer
+(task 0.4.4), same split as the leaderboards' props ≤ 4 KB rule.
+
+**Consequences:**
+- When a `games` table lands, adding the FK is a small follow-up migration;
+  existing rows already key on route ids.
+- PUT upsert semantics live in task 0.4.4.
+
+---
+
+## 2026-08-26 — Game settings endpoints: Playzoid extension, JWT-only writes, 32 KiB cap, upsert (task 0.4.4)
+
+**Context:** task 0.4.4 adds `GET/PUT /v1/games/{game_id}/settings`. Upstream
+Talo has only dashboard-managed global `GET /v1/game-config` KV — verified no
+upstream per-game settings HTTP endpoint exists, so the task text plus the
+0.4.3 schema decision are authoritative for the shape.
+
+**Decisions:**
+- **Documented Playzoid extension**, not upstream parity: request/response
+  shape defined by this repo (`{ gameId, config, createdAt, updatedAt }`,
+  camelCase like every other view). Recorded here so 0.4.13's TALO_API.md
+  update marks it as an extension rather than upstream surface.
+- **PUT upserts** (`INSERT … ON DUPLICATE KEY UPDATE config = ?`, fully
+  parameterized, value bound twice): first PUT creates, later PUTs replace
+  only `config`; `created_at` preserved, `updated_at` maintained by MySQL.
+  Always returns 200 with the read-back view — no create/update status split,
+  because clients address the row by id, not by server-assigned key.
+- **Size cap 32 KiB** (`MAX_CONFIG_BYTES`), mirroring the saves
+  `MAX_SAVE_BYTES` precedent; enforced pre-SQL alongside null-config and
+  id-length validation so bad requests never touch the database.
+- **No legacy alias mount**: the route is born after the 0.4.1 parity pass;
+  only `/v1/games/{game_id}/settings` exists (`/v1/socket-tickets`
+  precedent).
+- **Auth trade-off:** both endpoints require a valid JWT, but there is no
+  `games` table / ownership / admin scope yet, so any authenticated player
+  can overwrite any game's config. v0 accepts this per the task spec
+  ("auth-guarded"); revisit when `games` or scopes land. Rate limiting
+  arrives in 0.4.8.
+
+---
+
+## 2026-08-26 — Analytics events: append-only, SET NULL player FK, generic name+JSON schema (task 0.4.5)
+
+**Context:** task 0.4.5 adds the `analytics_events` table backing the batched
+`POST /v1/events` ingest (0.4.6). Upstream Talo's analytics event shape is
+undocumented in this repo (`TALO_API.md` has no events section;
+`TALO_API_STRUCTS.md` has no Event struct) — verified by grep before
+designing. `docs/memory.md` Open Question #6 already pins typed event
+schema as deferred to Phase 1.0.
+
+**Decisions:**
+- **Append-only semantics encoded in schema:** no `updated_at` column
+  (rows are never updated; its omission documents immutability intent)
+  and no `public_id` (unlike saves/players, events are write-only
+  fire-and-forget in v0 — clients never address a stored event).
+- **`player_id` nullable + ON DELETE SET NULL**, not CASCADE: events may be
+  emitted pre-identify (anonymous), and deleting a player must never erase
+  their event history — CASCADE would silently rewrite history and break
+  append-only guarantees.
+- **Generic schema:** free-form `name VARCHAR(64)` event key + optional JSON
+  `props`. No upstream-specific columns guessed from an undocumented shape;
+  whatever 0.4.6's batched body needs fits. Typed enum/payload schema lands
+  in Phase 1.0 when upstream shapes are verified.
+- **Minimal indexing for a high-write log:** `(player_id)` for per-player
+  queries, `(name, created_at)` for per-event-type time-range queries. No
+  more — every index taxes ingest throughput.
+
+---
+
+## 2026-08-26 — `POST /v1/events`: bare-array fire-and-forget ingest, anonymous-on-miss attribution (task 0.4.6)
+
+**Context:** task 0.4.6 implements the batched analytics ingest over the
+generic `analytics_events` schema from 0.4.5. Upstream Talo's event shape
+remains undocumented in this repo (no events section in `TALO_API.md`, no
+Event struct in `TALO_API_STRUCTS.md`), so the 0.4.5 schema plus this task's
+text ("batched array body, validate shape, fire-and-forget semantics") are
+authoritative.
+
+**Decisions:**
+- **Body = bare JSON array** `[{"name", "props"?}, ...]` — no wrapper
+  object, no client timestamps (`created_at` is DB-stamped; append-only
+  log), and `deny_unknown_fields` per event so malformed telemetry surfaces
+  as a clean 400 instead of silently dropping data.
+- **Whole-batch atomic validation pre-SQL** (`validate_batch` pure fn):
+  non-empty, ≤ `MAX_BATCH_EVENTS` = 100, trimmed `name` 1..=64 chars
+  (`VARCHAR(64)`), serialized `props` ≤ `MAX_PROPS_BYTES` = 4 KiB
+  (leaderboard props precedent). One invalid event rejects everything with
+  400; nothing partial is ever written.
+- **Fire-and-forget HTTP contract:** accepted batches answer
+  `202 {"accepted": n}` after one batched multi-row INSERT; *any*
+  post-validation database failure is logged (`tracing::error!` with batch
+  size) and **still answered 202** — analytics loss is tolerable by
+  definition and clients never block on DB health. Pool absent → 503
+  (degraded-mode precedent). Rejected: 500 on DB failure (contradicts the
+  contract); `tokio::spawn` writes (kills test determinism + backpressure).
+- **Best-effort attribution:** JWT `public_id` resolves to the internal
+  `players.id` once per request (`status <> 'deleted'`, saves precedent);
+  an unknown/deleted caller — or even a failing resolution query — stores
+  anonymous rows (`player_id NULL`) instead of failing. Deliberately unlike
+  saves' 404: events address no player resource.
+- **Batched INSERT via `sqlx::QueryBuilder::push_values`:** only `(?, ?, ?)`
+  placeholder scaffolding repeated by the validated count, every value
+  attached through `push_bind` — identical injection guarantee to the
+  static bound queries elsewhere; 100×3 params ≪ MySQL's parameter limit.
+  Explicit SQL-safety comment in code so reviewers don't misread it as
+  interpolation.
+- Caps bound abuse until rate limiting (0.4.8): worst case ~400 KiB/request.
+
+**Consequences:**
+- Swallowed DB errors create an observability gap until `/metrics` (0.4.9);
+  errors are logged with batch size meanwhile.
+- Typed event schema stays deferred to Phase 1.0 (Open Question #6); when it
+  lands only `EventInput`/`validate_batch` change.
+
+---
+
+## 2026-08-26 — `POST /v1/feedback`: analytics-events sink reuse, honest 500 on DB failure (task 0.4.7)
+
+**Context:** task 0.4.7 adds player feedback submission. Upstream Talo has no
+feedback shape in this repo (no feedback section in `TALO_API.md`, no struct
+in `TALO_API_STRUCTS.md`), the task's owned paths exclude `migrations/` and
+`src/entities/`, and 0.4.5's `analytics_events` schema was built deliberately
+generic (`name` + JSON `props`).
+
+**Decisions:**
+- **Store feedback in `analytics_events`:** one row per submission with
+  `name = "feedback"` and `props = { "message": <trimmed> }`. No dedicated
+  table/migration in v0; rows are never read back by any client-facing
+  endpoint. A dedicated table (ratings, categories, moderation state) remains
+  a Phase 1.0 candidate — if review rejects the sink reuse, the task reopens
+  as a migration follow-up.
+- **Honest failure, not fire-and-forget:** unlike `/v1/events`, feedback is
+  user content — a post-validation database failure answers
+  `500 {"error": "internal error"}` (details logged server-side only)
+  instead of faking success. Rejected: swallowing errors like analytics does
+  (silently loses player messages).
+- **Body `{ "message": ... }` with `deny_unknown_fields`:** trimmed message
+  must be 1..=`MAX_MESSAGE_CHARS` = 1000 chars (socket-chat gate precedent,
+  task 0.3.13) *and* its JSON-encoded `props` ≤ `MAX_PROPS_BYTES` = 4 KiB
+  (events precedent — escape-heavy control-char input can blow the encoded
+  cap while staying length-valid). No client timestamps or rating fields;
+  richer schema defers together with the dedicated-table decision.
+- **Best-effort attribution** identical to events: JWT `public_id` resolves
+  once (`status <> 'deleted'`, saves precedent); an unknown/deleted caller —
+  or a failing resolution query — stores anonymous (`player_id NULL`) rows,
+  never an error. Static `.bind()`-only INSERT.
+- **Canonical-only route** (no legacy alias, post-0.4.1 precedent); guard
+  order cheapest-first: auth 401 → pool 503 → validation 400 → insert.
+
+**Consequences:**
+- Feedback queries ride the existing `(name, created_at)` index; nothing new
+  to migrate or reverse.
+- Rate limiting (0.4.8) still required: caps bound per-request cost but not
+  request frequency.
+
+---
+
+## 2026-08-26 — Redis fixed-window rate limiting: fail-open, Arc<S> middleware, monomorphic limiter (task 0.4.8)
+
+**Context:** task 0.4.8 adds rate limiting on public routes. Redis is already a
+dependency (WebSocket hub pre-0.4); the 0.3.x degraded-mode pattern (service
+unavailable → pass-through, warn-logged) is the repo-wide precedent. The task
+marks task 0.4.8 owned paths `src/middleware/` + `src/config.rs`.
+
+**Decisions:**
+- **Fixed windows in Redis, not an in-process token bucket:** one key per
+  `(class, client ip, window_start)` (`rl:{class}:{ip}:{window_start}`),
+  incremented by an atomic `EVAL` (`INCR` → first-hit `EXPIRE` → `TTL`). Crosses
+  worker threads today and server instances when multi-node lands; token-bucket
+  state would need the same shared store anyway. Two classes: `auth`
+  (credential prefixes, tight budget — brute-force backstop) and `default`
+  (other public prefixes). Rejected: in-memory counters (per-worker skew) and a
+  simpler global bucket (one client starves everyone).
+- **Fail-open degraded mode** matches the 0.3.x precedent: Redis down at boot →
+  no `RateLimiter` app data → pass-through; mid-flight backend error → allow +
+  warn-log. Availability over strictness for v0.
+- **`X-Forwarded-For` trust is opt-in** (`RATE_LIMIT_TRUST_XFF=true`): the
+  header is trivially spoofable without an overwriting proxy, so the default
+  buckets by socket peer IP. Requests with no peer address pass through rather
+  than sharing one unkeyed bucket.
+- **Never clone the inner `HttpRequest` for the 429 path:** cloning a
+  `ServiceRequest` bumps the `Rc` refcount; when the response is built from the
+  clone, actix calls `match_info_mut()` on the shared `Rc` and panics. The 429
+  is built by consuming the request directly — `req.into_response(...)` — in
+  the same branch that would otherwise feed it to the downstream service.
+- **Middleware future is `'static`, so the inner service is stored as `Arc<S>`:**
+  `Box::pin(async move {...})` cannot capture `&self` (it dies with `call`).
+  Cloning the service into the future needs `S: Clone`; wrapping the field in
+  `Arc` needs only `S: 'static`, which actix services satisfy. Also requires
+  `S::Future: 'static`.
+- **`RateLimiter` is a single concrete type** (`Arc<dyn WindowCounter>`, not
+  `RateLimiter<C>`): `app_data` downcasts on the *concrete* type, so a generic
+  limiter silently defeats the middleware (tests registered
+  `RateLimiter<MockCounter>` while the middleware looked up
+  `RateLimiter<RedisWindowCounter>` and found nothing → everything passed
+  through). The trait is object-safe with a `'static` boxed `CounterFuture`;
+  implementations copy owned captures (connection clone, key `String`) up front.
+- **Injectable clock** (`NowFn` on `RateLimiter`, test-only constructor):
+  fixed-window rollover is deterministic in tests (429 holds at
+  `Retry-After − 1`, passes after the window elapses).
+
+**Consequences:**
+- Rate limiting is scoped by path prefix, so future public routes just add a
+  prefix to `RATE_LIMIT_PUBLIC_PREFIXES`.
+- `Retry-After`/`X-RateLimit-*` headers give clients and proxies a standard
+  backoff signal; 0.4.9 Prometheus metrics can report 429 counts per class.
+- Fail-open means a total Redis outage costs request-frequency protection but
+  never availability — consistent with `/healthz` never being limited.
+
+---
+
+## 2026-08-27 — Production hardening batch: global metrics, route-table OpenAPI, gated audit (tasks 0.4.9-0.4.13)
+
+**Context:** closing Phase 0.4 with observability, an OpenAPI spec, gated
+security scanning, live-stack rate-limit tests, and API docs. Three real
+decisions worth recording.
+
+**Decisions:**
+- **Prometheus via a process-global `LazyLock<Metrics>` registry + middleware:**
+  `MetricsMiddleware` wraps the app outermost (measures the whole pipeline
+  including 429s) and records method+status counters and a latency histogram;
+  the `/metrics` handler renders the registry plus live pool gauges sampled at
+  scrape time (no static DB collectors — correct even when a pool appears after
+  boot). WS connections move a gauge in `WsConn::started`/`stopping`. The
+  `/metrics` route skips recording itself. Rejected: per-request registry
+  instances (labels leak), and `actix-web-prom` (extra dep; manual is ~same
+  code).
+- **OpenAPI generated from a single route table, validated end-to-end in CI:**
+  one `ROUTES` const array (method, path, tag, summary, security, body, success
+  code) drives `utoipa` builders into an OpenAPI 3.0 document served at
+  `/openapi.json`. A unit test asserts every table row exists in the doc, and a
+  CI job boots the real server (degraded mode) and validates the served JSON.
+  Rejected: `#[utoipa::path]` on every handler (blast radius + schema churn for
+  ~22 handlers); the table gives one place to update and honest drift
+  detection. Socket-tickets documented as un-authenticated (matches the
+  handler).
+- **`cargo audit` gates CI with a justified ignore list:** `validator` 0.18→0.20
+  clears RUSTSEC-2024-0421 (`idna` 0.5). Two advisories cannot be fixed in
+  place — `h2` (actix-http 3.x pins h2 ^0.3, no 0.3.x fix; needs actix-web 5)
+  and `rsa` (no upstream fix; only reachable via sqlx-mysql password auth,
+  mitigated by TLS to MySQL) — so they are ignored in `.cargo/audit.toml` with
+  a mandatory rationale, not silently. Warnings (spin yanked, anyhow /
+  event-listener unsound) are non-gating by default.
+
+**Consequences:**
+- New public routes must be added to the OpenAPI `ROUTES` table or CI fails —
+  the spec cannot silently drift.
+- Adding a route to `RATE_LIMIT_PUBLIC_PREFIXES` does not change `/metrics` or
+  `/openapi.json` exposure (neither is a configured prefix).
+- The h2 advisory will keep failing `cargo audit` if the ignore is ever removed
+  without an actix-web 5 migration — tracked as a follow-up.
+
+---
+
+## 2026-10-12 — Bounded Redis handshake: degraded mode must actually degrade (0.4.13 follow-up)
+
+**Context:** re-enabling the CI triggers (previously `workflow_dispatch`-only)
+exposed a failing `openapi` job: the server never served `/openapi.json` even
+though the job boots it precisely so it *can* run without a database ("degraded
+mode"). Reproduced locally: the process stayed alive but never bound a socket.
+
+**Root cause:** `redis::aio::ConnectionManager::new` (redis 0.27) has no default
+connect timeout, and its internal retry loop re-arms indefinitely when the host
+is unreachable. `main` awaited that handshake *after* the DB pool, so an
+unreachable `REDIS_URL` hung startup forever — `HttpServer::bind` was never
+reached. An unparseable URL was unaffected (`Client::open` fails fast), which is
+why the "degraded mode" contract looked correct in earlier testing.
+
+**Decision:** all optional-infrastructure connections must carry an explicit,
+process-owned timeout. New `src/services/redis.rs` exposes
+`connect(&str) -> Result<ConnectionManager, String>` which wraps
+`ConnectionManager::new` in a 3s `tokio::time::timeout` and maps every failure
+(invalid URL, connect error, timeout) to a `String` for the caller to warn-log
+and degrade, matching `db::build_pool`'s explicit `acquire_timeout` (5s).
+`main` now calls it and, on `Err`, continues with Redis-backed caching and rate
+limiting disabled.
+
+**Consequences:**
+- Startup is bounded: worst case ≈ 5s (MySQL) + 3s (Redis) before binding, so
+  liveness probes and CI boots are deterministic.
+- Rate limiting and caching are both off when Redis is down; the existing
+  fail-open middleware path is unchanged and now actually reachable.
+- New public routes must still be added to the OpenAPI `ROUTES` table — the job
+  that enforces it (and would have caught this) runs again.
+- Follow-up: the CI `openapi` job's unreachable-DB config previously hid the
+  Redis hang only because the whole workflow never ran; keep it enabled.
+
+---
+
+## 2026-10-12 — Repository governance: rulesets repaired (MainProtect, ReleaseBranchProtect, TagProtect)
+
+**Context:** while reviewing the Phase 0.4 release PR, every push to
+`release/v0.4` reported "Bypassed rule violations … Cannot update this
+protected ref", yet `GET /branches/release/v0.4/protection` returned 404. The
+enforcement was a **ruleset** (`MainProtect`, id 24756876), not classic branch
+protection.
+
+**Findings:**
+- `MainProtect` was named for `main` but matched `ref_name.include: ["~ALL"]`
+  and carried the `update` **and** `creation` rules. Absent bypass actors, that
+  combination forbids pushing to *and* creating *any* branch — the ruleset was
+  mis-scoped and effectively only produced the bypass warning.
+- Its `bypass_actors` listed the org-admin actor plus DeployKey, repository
+  roles 2/4/5 and one team, so nothing was enforced for anyone with write
+  access. It had no `pull_request` and no `required_status_checks`, meaning the
+  `AGENTS.md` contract ("never push directly to `main`", "CI green plus one
+  human reviewer") was social only — not machine-enforced. This mattered
+  because CI had been dead for ~4 months and nothing blocked red merges.
+- `v0.4.0` was a **lightweight** tag, unlike the annotated `v0.2.0`/`v0.3.0`,
+  and sat 5 commits behind the branch tip.
+
+**Decision:**
+- **Tags:** cut annotated `v0.4.1` at `447a49b` for the follow-up fixes and
+  keep `v0.4.0` as the phase-completion marker. Rejected re-pointing `v0.4.0`:
+  rewriting a published tag is worse than an extra patch tag, and semver treats
+  post-release bug fixes as a patch anyway.
+- **MainProtect:** re-scope to `~DEFAULT_BRANCH`; add `pull_request` (1
+  approval, `dismiss_stale_reviews_on_push`, `required_review_thread_resolution`)
+  and `required_status_checks` (`Lint & Test`, `cargo-audit`, `OpenAPI drift
+  check`, `sqlx migrate (mysql)`); trim bypass actors to the Organization-admin
+  actor only. `non_fast_forward` + `deletion` retained.
+- **ReleaseBranchProtect (new, id 24958920):** `deletion` +
+  `non_fast_forward` for `refs/heads/release/**`, preserving the force-push
+  protection that re-scoping `MainProtect` would otherwise drop.
+- **TagProtect (new, id 24958921):** `deletion` + `update` for `refs/tags/v*`.
+
+**Consequences:**
+- "CI green" is now enforced by GitHub, not convention; a red PR cannot merge
+  to `main`, and direct pushes/PR-less merges to `main` are blocked.
+- The single Organization-admin bypass is deliberate: it is the escape hatch,
+  and it is also why the author does not strictly need a second human to merge.
+  `AGENTS.md` still requires a human reviewer — treat the bypass as an
+  emergency path, not a workflow.
+- **Deadlock risk to watch:** requiring 1 approval plus "never self-approve"
+  needs a second human with write access; today the admin bypass is doing that
+  work. Add a second reviewer (or a bot account) if the bypass is ever removed.
+- Creating a new `release/**` branch is unaffected (`creation` applies to the
+  default branch only now). Tags are create-only: `v*` can be added but not
+  moved or deleted.
+
+---
+
+## 2026-10-12 — SECURITY: `.env` (JWT signing key) leaked in public repo history
+
+**Incident:** `.env` was committed in `a778497` and has been present in every
+branch and all four tags ever since. The repository is **public**, and the file
+contained a real `JWT_SECRET` (a 64-hex-character HS256 signing key) — i.e. the
+key that signed all auth tokens. Anyone with that value could forge a valid JWT
+for any player id. The value has since been rotated and is not reproduced here.
+GitHub secret scanning was **disabled** on this repository, so nothing alerted.
+
+**Blast radius:** committed on `main`, `release/v0.3`, `release/v0.4` and all
+`task/*` branches; contained in tags `v0.2.0`, `v0.3.0`, `v0.4.0`, `v0.4.1`.
+The adding commit is #97 of 144, so any history rewrite touches ~96 commits and
+every ref.
+
+**Decision (stage 1 — done):**
+- Rotate the key. This is the only actual remediation: the value is already
+  public, so removing it from history does not un-leak it. Documented in
+  `.env.example` that the secret must be generated per environment and never
+  committed.
+- `git rm --cached .env` + `.gitignore` entries (`.env`, `.env.*`,
+  `!.env.example`) so the file cannot be re-committed.
+- Enable GitHub secret scanning + push protection so this class of mistake is
+  caught at push time instead of by a human reading `git ls-files`.
+
+**Decision (stage 2 — done 2026-10-12):** `.env` purged from history with
+`git filter-repo --path .env --invert-paths` on a mirror clone (backup kept
+beforehand). All 11 branches force-pushed and all four tags deleted + recreated
+from filtered history. Verified: 0 commits touch `.env`, 0 blobs contain the
+secret, 0 trees list the path; commit count unchanged (147); `release/v0.4`'s
+**tree hash is byte-identical**, so prior build/test validation still holds —
+only `.env` was removed. `TagProtect` was temporarily disabled for the tag
+delete/recreate and restored immediately after.
+
+**⚠️ Residual exposure — GitHub `refs/pull/*/head` are immutable.** After the
+rewrite, a fresh clone *still* contained `.env` via `refs/pull/{14..20}/head`,
+which GitHub pins to the original pre-rewrite commits (PR 14 was the commit
+that introduced it, `a778497`). Pushing a deletion is rejected:
+`! [remote rejected] refs/pull/14/head (deny updating a hidden ref)`. These
+refs cannot be removed by git or by API from a normal account; only GitHub
+Support can purge them by garbage-collecting unreachable objects and closing
+the PRs. Until that happens the secret remains retrievable **even though the
+key has been rotated, so it can no longer be used**. Any future secret leak on
+this repository has the same escape route: branch/tag rewrites are not
+sufficient while the offending PRs exist.
+
+**Consequences:**
+- `JWT_SECRET` committed in this repo is permanently compromised regardless of
+  history edits; treat any token signed with it before rotation as untrusted.
+- There is no known production deployment of Playzoid-Server (the VPS skill
+  covers ZoidMatter, a different project), so the practical exposure is a dev
+  instance — but the key must still be rotated.
+- History rewriting changed every commit SHA from `a778497` onward; open PR #21
+  was retargeted to the rewritten `release/v0.4` and remains MERGEABLE. Any
+  existing clone must be re-cloned or hard-reset, not pulled.
+- Force-pushing protected branches required the Organization-admin bypass in
+  `MainProtect`/`ReleaseBranchProtect`; both rulesets remain active with
+  `non_fast_forward`, so this was a one-off administrative action, not a
+  routine workflow.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

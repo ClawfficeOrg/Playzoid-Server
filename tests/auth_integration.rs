@@ -8,7 +8,11 @@
 //! Override with `DATABASE_URL` / `REDIS_URL` env vars.
 
 use actix_web::{App, http::StatusCode, test, web};
-use playzoid_server::{api, config::Config, db};
+use playzoid_server::{
+    api,
+    config::{Config, RateLimitConfig},
+    db,
+};
 use redis::aio::ConnectionManager;
 use serde_json::Value;
 use uuid::Uuid;
@@ -34,6 +38,7 @@ async fn test_fixtures() -> (sqlx::MySqlPool, ConnectionManager, Config) {
         redis_url,
         jwt_secret: JWT_SECRET.into(),
         jwt_expiry_secs: 3600,
+        rate_limit: RateLimitConfig::default(),
     };
     (pool, mgr, cfg)
 }
@@ -59,7 +64,7 @@ async fn register_creates_player_and_returns_201() {
 
     let username = unique_username();
     let req = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(serde_json::json!({ "username": &username, "password": "supersecretpassword" }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -87,7 +92,7 @@ async fn register_duplicate_username_returns_409() {
     let payload = serde_json::json!({ "username": &username, "password": "supersecretpassword" });
 
     let r1 = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(&payload)
         .to_request();
     assert_eq!(
@@ -96,7 +101,7 @@ async fn register_duplicate_username_returns_409() {
     );
 
     let r2 = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(&payload)
         .to_request();
     assert_eq!(
@@ -119,7 +124,7 @@ async fn register_short_password_returns_400() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(serde_json::json!({ "username": "validuser", "password": "short" }))
         .to_request();
     assert_eq!(
@@ -147,7 +152,7 @@ async fn login_valid_credentials_returns_jwt() {
     let password = "supersecretpassword";
 
     let reg = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(serde_json::json!({ "username": &username, "password": password }))
         .to_request();
     assert_eq!(
@@ -156,7 +161,7 @@ async fn login_valid_credentials_returns_jwt() {
     );
 
     let req = test::TestRequest::post()
-        .uri("/auth/login")
+        .uri("/v1/auth/login")
         .set_json(serde_json::json!({ "username": &username, "password": password }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -183,13 +188,13 @@ async fn login_wrong_password_returns_401() {
 
     let username = unique_username();
     let reg = test::TestRequest::post()
-        .uri("/auth/register")
+        .uri("/v1/auth/register")
         .set_json(serde_json::json!({ "username": &username, "password": "correctpassword" }))
         .to_request();
     test::call_service(&app, reg).await;
 
     let req = test::TestRequest::post()
-        .uri("/auth/login")
+        .uri("/v1/auth/login")
         .set_json(serde_json::json!({ "username": &username, "password": "wrongpassword!!" }))
         .to_request();
     assert_eq!(
@@ -212,11 +217,72 @@ async fn login_unknown_user_returns_401() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri("/auth/login")
+        .uri("/v1/auth/login")
         .set_json(serde_json::json!({ "username": "ghost-no-such-user", "password": "whatever" }))
         .to_request();
     assert_eq!(
         test::call_service(&app, req).await.status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+// ── Legacy `/auth` alias paths (0.4.1 transition) ─────────────────────────────
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn register_via_legacy_path_still_works() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool))
+            .app_data(web::Data::new(mgr))
+            .configure(api::auth::config),
+    )
+    .await;
+
+    let username = unique_username();
+    let req = test::TestRequest::post()
+        .uri("/auth/register")
+        .set_json(serde_json::json!({ "username": &username, "password": "supersecretpassword" }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["username"], username);
+}
+
+#[actix_web::test]
+#[ignore = "requires live MySQL + Redis (docker compose -f config/docker-compose.dev.yml up -d)"]
+async fn login_via_legacy_path_still_works() {
+    let (pool, mgr, cfg) = test_fixtures().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(cfg))
+            .app_data(web::Data::new(pool))
+            .app_data(web::Data::new(mgr))
+            .configure(api::auth::config),
+    )
+    .await;
+
+    let username = unique_username();
+    let password = "supersecretpassword";
+    let reg = test::TestRequest::post()
+        .uri("/auth/register")
+        .set_json(serde_json::json!({ "username": &username, "password": password }))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, reg).await.status(),
+        StatusCode::CREATED
+    );
+
+    let req = test::TestRequest::post()
+        .uri("/auth/login")
+        .set_json(serde_json::json!({ "username": &username, "password": password }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = test::read_body_json(resp).await;
+    assert!(body["token"].is_string() && !body["token"].as_str().unwrap().is_empty());
 }
