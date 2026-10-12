@@ -29,6 +29,18 @@ Per-task detail sections follow.
   non-gating warnings with documented policy (`anyhow`,
   `event-listener`, `chacha20`, `spin`).
 
+### CI
+- Re-enabled CI triggers. `.github/workflows/ci.yml` had drifted to
+  `workflow_dispatch`-only, so no workflow ran on pull requests and GitHub
+  reported "no checks reported"; the `AGENTS.md` "CI green" merge gate was
+  unsatisfiable. Now runs on pushes to `main` and `release/**` and on pull
+  requests targeting `main`. `workflow_dispatch` retained for manual re-runs.
+
+### Docs
+- Corrected the RC-tag rule in `docs/todo-v1.md`: it claimed *this* line
+  (`0.4`) has `Y = 0`, but the release line is `0.4`, so `Y = 4`. The rule
+  itself is unchanged and now matches `docs/todo-v0.md` and `AGENTS.md`.
+
 ## [0.4.0] — 2026-08-27 — metrics, OpenAPI, audit gating, tests, API docs (tasks 0.4.9-0.4.13)
 
 ### Added
