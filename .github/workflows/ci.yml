@@ -1,7 +1,17 @@
 name: CI
 
 on:
-  workflow_dispatch: # disabled — trigger manually only if needed
+  # Re-enabled 2026-10-12: the workflow was `workflow_dispatch`-only, so PRs
+  # showed "no checks reported" and the "CI green" gate in AGENTS.md could not
+  # be satisfied. Keep in sync with the docker-smoke job's pull_request guard.
+  push:
+    branches:
+      - main
+      - 'release/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: # kept for manual re-runs
 
 env:
   CARGO_TERM_COLOR: always
