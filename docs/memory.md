@@ -805,6 +805,48 @@ protection.
 
 ---
 
+## 2026-10-12 — SECURITY: `.env` (JWT signing key) leaked in public repo history
+
+**Incident:** `.env` was committed in `a778497` and has been present in every
+branch and all four tags ever since. The repository is **public**, and the file
+contained a real `JWT_SECRET`
+(`2a76c268…c39b`) — i.e. the HS256 key that signs all auth tokens. Anyone with
+that value can forge a valid JWT for any player id. GitHub secret scanning is
+**disabled** on this repository, so nothing ever alerted.
+
+**Blast radius:** committed on `main`, `release/v0.3`, `release/v0.4` and all
+`task/*` branches; contained in tags `v0.2.0`, `v0.3.0`, `v0.4.0`, `v0.4.1`.
+The adding commit is #97 of 144, so any history rewrite touches ~96 commits and
+every ref.
+
+**Decision (stage 1 — done):**
+- Rotate the key. This is the only actual remediation: the value is already
+  public, so removing it from history does not un-leak it. Documented in
+  `.env.example` that the secret must be generated per environment and never
+  committed.
+- `git rm --cached .env` + `.gitignore` entries (`.env`, `.env.*`,
+  `!.env.example`) so the file cannot be re-committed.
+- Enable GitHub secret scanning + push protection so this class of mistake is
+  caught at push time instead of by a human reading `git ls-files`.
+
+**Decision (stage 2 — pending):** purge `.env` from history with
+`git filter-repo --path .env --invert-paths`, then force-push every ref and
+re-create all four tags. Explicitly **not a substitute for rotation**. Requires
+temporarily relaxing the new `TagProtect` ruleset (tag `update`/`deletion` are
+now blocked) and is a synchronized operation: all 5 remote branches need force
+pushes and every collaborator must re-clone or hard-reset.
+
+**Consequences:**
+- `JWT_SECRET` committed in this repo is permanently compromised regardless of
+  history edits; treat any token signed with it before rotation as untrusted.
+- There is no known production deployment of Playzoid-Server (the VPS skill
+  covers ZoidMatter, a different project), so the practical exposure is a dev
+  instance — but the key must still be rotated.
+- History rewriting changes every commit SHA from `a778497` onward, invalidating
+  open PR head refs and any local clones.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve
