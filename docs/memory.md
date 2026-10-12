@@ -752,6 +752,59 @@ limiting disabled.
 
 ---
 
+## 2026-10-12 — Repository governance: rulesets repaired (MainProtect, ReleaseBranchProtect, TagProtect)
+
+**Context:** while reviewing the Phase 0.4 release PR, every push to
+`release/v0.4` reported "Bypassed rule violations … Cannot update this
+protected ref", yet `GET /branches/release/v0.4/protection` returned 404. The
+enforcement was a **ruleset** (`MainProtect`, id 24756876), not classic branch
+protection.
+
+**Findings:**
+- `MainProtect` was named for `main` but matched `ref_name.include: ["~ALL"]`
+  and carried the `update` **and** `creation` rules. Absent bypass actors, that
+  combination forbids pushing to *and* creating *any* branch — the ruleset was
+  mis-scoped and effectively only produced the bypass warning.
+- Its `bypass_actors` listed the org-admin actor plus DeployKey, repository
+  roles 2/4/5 and one team, so nothing was enforced for anyone with write
+  access. It had no `pull_request` and no `required_status_checks`, meaning the
+  `AGENTS.md` contract ("never push directly to `main`", "CI green plus one
+  human reviewer") was social only — not machine-enforced. This mattered
+  because CI had been dead for ~4 months and nothing blocked red merges.
+- `v0.4.0` was a **lightweight** tag, unlike the annotated `v0.2.0`/`v0.3.0`,
+  and sat 5 commits behind the branch tip.
+
+**Decision:**
+- **Tags:** cut annotated `v0.4.1` at `447a49b` for the follow-up fixes and
+  keep `v0.4.0` as the phase-completion marker. Rejected re-pointing `v0.4.0`:
+  rewriting a published tag is worse than an extra patch tag, and semver treats
+  post-release bug fixes as a patch anyway.
+- **MainProtect:** re-scope to `~DEFAULT_BRANCH`; add `pull_request` (1
+  approval, `dismiss_stale_reviews_on_push`, `required_review_thread_resolution`)
+  and `required_status_checks` (`Lint & Test`, `cargo-audit`, `OpenAPI drift
+  check`, `sqlx migrate (mysql)`); trim bypass actors to the Organization-admin
+  actor only. `non_fast_forward` + `deletion` retained.
+- **ReleaseBranchProtect (new, id 24958920):** `deletion` +
+  `non_fast_forward` for `refs/heads/release/**`, preserving the force-push
+  protection that re-scoping `MainProtect` would otherwise drop.
+- **TagProtect (new, id 24958921):** `deletion` + `update` for `refs/tags/v*`.
+
+**Consequences:**
+- "CI green" is now enforced by GitHub, not convention; a red PR cannot merge
+  to `main`, and direct pushes/PR-less merges to `main` are blocked.
+- The single Organization-admin bypass is deliberate: it is the escape hatch,
+  and it is also why the author does not strictly need a second human to merge.
+  `AGENTS.md` still requires a human reviewer — treat the bypass as an
+  emergency path, not a workflow.
+- **Deadlock risk to watch:** requiring 1 approval plus "never self-approve"
+  needs a second human with write access; today the admin bypass is doing that
+  work. Add a second reviewer (or a bot account) if the bypass is ever removed.
+- Creating a new `release/**` branch is unaffected (`creation` applies to the
+  default branch only now). Tags are create-only: `v*` can be added but not
+  moved or deleted.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

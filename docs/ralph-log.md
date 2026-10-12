@@ -366,3 +366,24 @@ Verified locally: unreachable Redis now boots and serves `/openapi.json` in
 ~9s (was: hung indefinitely); the CI job's exact validation passes (18 paths,
 spec 3.1.0). cargo fmt/clippy green, 249 lib tests pass (2 new). Recorded in
 docs/memory.md (decision), docs/learnings.md (0.4.13-followup), docs/CHANGES.md.
+
+## 2026-10-12 09:10
+
+DONE: tags + repository governance.
+
+Tags: annotated `v0.4.1` cut at `447a49b` and pushed (covers the rustls security
+bump, CI restart, bounded Redis startup). `v0.4.0` deliberately left as the
+phase-completion marker; re-pointing a published tag rejected in favour of a
+patch tag. `v0.4.0` remains lightweight vs the annotated `v0.2.0`/`v0.3.0` —
+left as-is, noted.
+
+Governance: replaced the mis-scoped `MainProtect` ruleset. It matched `~ALL`
+with `update`+`creation` rules — i.e. it blocked pushes/creates on every branch
+while its name said `main`. Now scoped to `~DEFAULT_BRANCH` with
+`pull_request` (1 approval, stale-review dismissal, thread resolution) and
+`required_status_checks` (Lint & Test, cargo-audit, OpenAPI drift check, sqlx
+migrate) added; bypass actors trimmed 6 → 1 (Organization admin). Added
+`ReleaseBranchProtect` (deletion + non_fast_forward on `refs/heads/release/**`)
+and `TagProtect` (deletion + update on `refs/tags/v*`). Effect: "CI green" and
+the PR requirement from AGENTS.md are now machine-enforced, not convention.
+

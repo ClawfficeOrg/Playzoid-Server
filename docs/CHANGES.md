@@ -16,7 +16,11 @@ Release of the full Phase 0.4 line (tasks 0.4.1–0.4.13). Highlights:
 
 Per-task detail sections follow.
 
-## [Unreleased] — 2026-10-12 — dependency bump: clear RUSTSEC-2026-0285
+## [0.4.1] — 2026-10-12 — security bump, CI restart, bounded startup
+
+Patch release on top of `0.4.0`, tagged `v0.4.1`. Covers the fixes found while
+reviewing the Phase 0.4 release PR (#21); `v0.4.0` remains the phase-completion
+marker. No API or schema changes.
 
 ### Fixed
 - `cargo audit` is clean again after the advisory database advanced past the
@@ -28,6 +32,15 @@ Per-task detail sections follow.
   and no other versions moved. The four remaining advisories are
   non-gating warnings with documented policy (`anyhow`,
   `event-listener`, `chacha20`, `spin`).
+- **Startup hung forever when Redis was unreachable.** Re-enabling CI exposed a
+  failing `openapi` job: the process stayed alive but never bound a socket, so
+  `/openapi.json` was never served. `redis::aio::ConnectionManager::new` has no
+  default connect timeout and its retry loop re-arms indefinitely, and `main`
+  awaited it after the DB pool — so the "degraded mode" path never ran and
+  `HttpServer::bind` was never reached. New `src/services/redis.rs` wraps the
+  handshake in a 3s timeout and returns a plain error for the caller to
+  warn-log, mirroring `db::build_pool`'s explicit `acquire_timeout`. Startup is
+  now bounded (≈5s MySQL + 3s Redis worst case) and boots degraded as designed.
 
 ### CI
 - Re-enabled CI triggers. `.github/workflows/ci.yml` had drifted to
@@ -36,10 +49,27 @@ Per-task detail sections follow.
   unsatisfiable. Now runs on pushes to `main` and `release/**` and on pull
   requests targeting `main`. `workflow_dispatch` retained for manual re-runs.
 
+### Repository governance
+- **`MainProtect` ruleset repaired.** It was named for `main` but matched
+  `~ALL` (`ref_name.include: ["~ALL"]`) while carrying both the `update` and
+  `creation` rules — so, minus bypass actors, *no one* could push to or create
+  *any* branch. Now scoped to `~DEFAULT_BRANCH` and given real teeth:
+  `pull_request` (1 approval, stale-review dismissal, thread resolution) and
+  `required_status_checks` (`Lint & Test`, `cargo-audit`, `OpenAPI drift
+  check`, `sqlx migrate (mysql)`). Bypass actors trimmed 6 → 1 (Organization
+  admin only), down from generic org/deploy-key/repo-role/team entries that
+  made the ruleset decorative.
+- **New `ReleaseBranchProtect` ruleset** — `deletion` + `non_fast_forward` for
+  `refs/heads/release/**`, restoring force-push protection that the re-scoping
+  would otherwise have removed.
+- **New `TagProtect` ruleset** — `deletion` + `update` for `refs/tags/v*`, so
+  release tags cannot be silently re-pointed or removed.
+
 ### Docs
 - Corrected the RC-tag rule in `docs/todo-v1.md`: it claimed *this* line
   (`0.4`) has `Y = 0`, but the release line is `0.4`, so `Y = 4`. The rule
   itself is unchanged and now matches `docs/todo-v0.md` and `AGENTS.md`.
+
 
 ### Fixed
 - **Startup hung forever when Redis was unreachable.** Re-enabling CI exposed a
