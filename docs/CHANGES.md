@@ -71,6 +71,18 @@ Follow-ups on top of `v0.4.1`; not covered by that tag.
 - Follow-up: purge `.env` from history (`git filter-repo`) and force-push all
   refs + re-create tags. Requires temporarily relaxing `TagProtect`.
 
+**Done:** history rewritten (`git filter-repo --path .env --invert-paths`); all
+11 branches force-pushed, all 4 tags deleted and recreated; `release/v0.4` tree
+hash byte-identical so prior validation still holds; local clone re-synced.
+`TagProtect` disabled only for the tag delete/recreate, then restored.
+
+**⚠️ Residual:** GitHub's `refs/pull/{14..20}/head` still pin the original
+pre-rewrite commits, so `.env` remains retrievable from the remote despite the
+rewrite. Hidden refs cannot be deleted by git or API (`deny updating a hidden
+ref`) — a GitHub Support request to GC unreachable objects is required. Mitigated
+by rotation: the key is useless. **Never assume a history rewrite alone
+remediates a leaked secret.**
+
 ### Repository governance
 - **`MainProtect` ruleset repaired.** It was named for `main` but matched
   `~ALL` (`ref_name.include: ["~ALL"]`) while carrying both the `update` and

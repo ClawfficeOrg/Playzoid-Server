@@ -408,3 +408,18 @@ is already done locally.
 Also done: local dev stack brought up (docker compose db+redis, migrations,
 release build) — healthz db=ok, register/login round-trip 201/200, /metrics
 live, rate limiting 429s after the auth budget.
+
+## 2026-10-12 19:35
+
+DONE: history rewrite (`.env` removal). filter-repo on a mirror clone, backup
+taken first. 11 branches force-pushed; 4 tags deleted + recreated; TagProtect
+disabled for the tag work then restored. Verified: 0 commits/blobs/trees contain
+`.env` or the secret; 147 commits unchanged; release/v0.4 tree hash identical so
+prior CI/build validation still holds. Local clone re-synced (all branches now
+match origin; `.env` still on disk and still ignored).
+
+BLOCKER: residual exposure. GitHub refs/pull/{14..20}/head are immutable hidden
+refs pinned to the pre-rewrite commits, so `.env` is STILL retrievable from the
+remote (`git cat-file -p refs/pull/14/head:.env`). Deletion rejected with
+"deny updating a hidden ref". Requires a GitHub Support GC request. Mitigated by
+rotating the key, which is already done. Lesson recorded in memory.md.

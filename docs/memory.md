@@ -829,12 +829,26 @@ every ref.
 - Enable GitHub secret scanning + push protection so this class of mistake is
   caught at push time instead of by a human reading `git ls-files`.
 
-**Decision (stage 2 — pending):** purge `.env` from history with
-`git filter-repo --path .env --invert-paths`, then force-push every ref and
-re-create all four tags. Explicitly **not a substitute for rotation**. Requires
-temporarily relaxing the new `TagProtect` ruleset (tag `update`/`deletion` are
-now blocked) and is a synchronized operation: all 5 remote branches need force
-pushes and every collaborator must re-clone or hard-reset.
+**Decision (stage 2 — done 2026-10-12):** `.env` purged from history with
+`git filter-repo --path .env --invert-paths` on a mirror clone (backup kept
+beforehand). All 11 branches force-pushed and all four tags deleted + recreated
+from filtered history. Verified: 0 commits touch `.env`, 0 blobs contain the
+secret, 0 trees list the path; commit count unchanged (147); `release/v0.4`'s
+**tree hash is byte-identical**, so prior build/test validation still holds —
+only `.env` was removed. `TagProtect` was temporarily disabled for the tag
+delete/recreate and restored immediately after.
+
+**⚠️ Residual exposure — GitHub `refs/pull/*/head` are immutable.** After the
+rewrite, a fresh clone *still* contained `.env` via `refs/pull/{14..20}/head`,
+which GitHub pins to the original pre-rewrite commits (PR 14 was the commit
+that introduced it, `a778497`). Pushing a deletion is rejected:
+`! [remote rejected] refs/pull/14/head (deny updating a hidden ref)`. These
+refs cannot be removed by git or by API from a normal account; only GitHub
+Support can purge them by garbage-collecting unreachable objects and closing
+the PRs. Until that happens the secret remains retrievable **even though the
+key has been rotated, so it can no longer be used**. Any future secret leak on
+this repository has the same escape route: branch/tag rewrites are not
+sufficient while the offending PRs exist.
 
 **Consequences:**
 - `JWT_SECRET` committed in this repo is permanently compromised regardless of
@@ -842,8 +856,13 @@ pushes and every collaborator must re-clone or hard-reset.
 - There is no known production deployment of Playzoid-Server (the VPS skill
   covers ZoidMatter, a different project), so the practical exposure is a dev
   instance — but the key must still be rotated.
-- History rewriting changes every commit SHA from `a778497` onward, invalidating
-  open PR head refs and any local clones.
+- History rewriting changed every commit SHA from `a778497` onward; open PR #21
+  was retargeted to the rewritten `release/v0.4` and remains MERGEABLE. Any
+  existing clone must be re-cloned or hard-reset, not pulled.
+- Force-pushing protected branches required the Organization-admin bypass in
+  `MainProtect`/`ReleaseBranchProtect`; both rulesets remain active with
+  `non_fast_forward`, so this was a one-off administrative action, not a
+  routine workflow.
 
 ---
 
