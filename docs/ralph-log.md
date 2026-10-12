@@ -352,3 +352,17 @@ DONE: 0.4.7 implemented on task/0.4.7 — POST /v1/feedback. Feedback stored as 
 ## 2026-08-26 07:55
 
 DONE: 0.4.7 merged into release/v0.4.
+
+## 2026-10-12 07:55
+
+DONE: dependency bump (rustls 0.23.45 clears RUSTSEC-2026-0285), CI triggers
+re-enabled, todo-v1 RC-tag rule corrected. Re-enabling CI immediately surfaced
+a real bug: the `openapi` job failed because the process hung forever on an
+unreachable Redis (ConnectionManager handshake has no connect timeout), so
+degraded mode never ran and the server never bound. Fixed by bounding the
+handshake in new `src/services/redis.rs` (3s timeout, error → warn-log →
+continue degraded), matching `db::build_pool`'s explicit `acquire_timeout`.
+Verified locally: unreachable Redis now boots and serves `/openapi.json` in
+~9s (was: hung indefinitely); the CI job's exact validation passes (18 paths,
+spec 3.1.0). cargo fmt/clippy green, 249 lib tests pass (2 new). Recorded in
+docs/memory.md (decision), docs/learnings.md (0.4.13-followup), docs/CHANGES.md.

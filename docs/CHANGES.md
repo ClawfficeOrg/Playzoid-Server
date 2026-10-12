@@ -41,6 +41,17 @@ Per-task detail sections follow.
   (`0.4`) has `Y = 0`, but the release line is `0.4`, so `Y = 4`. The rule
   itself is unchanged and now matches `docs/todo-v0.md` and `AGENTS.md`.
 
+### Fixed
+- **Startup hung forever when Redis was unreachable.** Re-enabling CI exposed a
+  failing `openapi` job: the process stayed alive but never bound a socket, so
+  `/openapi.json` was never served. `redis::aio::ConnectionManager::new` has no
+  default connect timeout and its retry loop re-arms indefinitely, and `main`
+  awaited it after the DB pool — so the "degraded mode" path never ran and
+  `HttpServer::bind` was never reached. New `src/services/redis.rs` wraps the
+  handshake in a 3s timeout and returns a plain error for the caller to
+  warn-log, mirroring `db::build_pool`'s explicit `acquire_timeout`. Startup is
+  now bounded (≈5s MySQL + 3s Redis worst case) and boots degraded as designed.
+
 ## [0.4.0] — 2026-08-27 — metrics, OpenAPI, audit gating, tests, API docs (tasks 0.4.9-0.4.13)
 
 ### Added

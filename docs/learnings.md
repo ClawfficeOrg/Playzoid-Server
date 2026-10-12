@@ -95,6 +95,30 @@ bullets over prose. Read the last few sections before starting a similar task.
 - Unique usernames (`u<uuid12>`) prevent cross-run collisions on the shared
   dev database.
 
+## 0.4.13-followup — Redis connect can hang startup (2026-10-12)
+
+- `redis::aio::ConnectionManager::new` has **no connect timeout** by default.
+  Against an unreachable Redis host (TCP blackhole, the CI case) the initial
+  handshake never returns: the retry loop re-arms past its nominal
+  `number_of_retries`, so the process reaches `main`'s Redis branch and then
+  hangs forever. The "degraded mode" path never runs and `HttpServer::bind` is
+  never reached — the server is simply dead with a healthy-looking PID.
+- Symptom to recognise: process **alive but no LISTEN socket**, and the log
+  stops right after the DB-pool warning (no "Starting Playzoid server"). An
+  *unparseable* Redis URL does **not** reproduce it — `Client::open` fails fast
+  and degraded mode works; only *unreachable* does.
+- Fix: bound the handshake yourself. `services::redis::connect` wraps
+  `ConnectionManager::new` in `tokio::time::timeout` (3s) and maps any failure
+  to `Err(String)`, mirroring `db::build_pool`'s explicit `acquire_timeout`.
+  Any dependency whose client has no default timeout must be wrapped the same
+  way before it can be called "optional".
+- Why it hid: the CI workflow was `workflow_dispatch`-only, so the OpenAPI job
+  (which boots the server with unreachable `DATABASE_URL` **and** `REDIS_URL`)
+  never ran. Re-enabling CI surfaced it immediately. A test that never executes
+  is worse than no test — it certifies a broken path.
+- `ConnectionManager` is not `Debug`, so `Result::expect_err` won't compile on a
+  `Result<ConnectionManager, _>`. Match the result and panic in the `Ok` arm.
+
 ## 0.4.8 — Redis rate limiting
 
 - Cloning a `ServiceRequest` for inspection then building a response from the

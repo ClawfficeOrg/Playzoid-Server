@@ -717,6 +717,41 @@ decisions worth recording.
 
 ---
 
+## 2026-10-12 — Bounded Redis handshake: degraded mode must actually degrade (0.4.13 follow-up)
+
+**Context:** re-enabling the CI triggers (previously `workflow_dispatch`-only)
+exposed a failing `openapi` job: the server never served `/openapi.json` even
+though the job boots it precisely so it *can* run without a database ("degraded
+mode"). Reproduced locally: the process stayed alive but never bound a socket.
+
+**Root cause:** `redis::aio::ConnectionManager::new` (redis 0.27) has no default
+connect timeout, and its internal retry loop re-arms indefinitely when the host
+is unreachable. `main` awaited that handshake *after* the DB pool, so an
+unreachable `REDIS_URL` hung startup forever — `HttpServer::bind` was never
+reached. An unparseable URL was unaffected (`Client::open` fails fast), which is
+why the "degraded mode" contract looked correct in earlier testing.
+
+**Decision:** all optional-infrastructure connections must carry an explicit,
+process-owned timeout. New `src/services/redis.rs` exposes
+`connect(&str) -> Result<ConnectionManager, String>` which wraps
+`ConnectionManager::new` in a 3s `tokio::time::timeout` and maps every failure
+(invalid URL, connect error, timeout) to a `String` for the caller to warn-log
+and degrade, matching `db::build_pool`'s explicit `acquire_timeout` (5s).
+`main` now calls it and, on `Err`, continues with Redis-backed caching and rate
+limiting disabled.
+
+**Consequences:**
+- Startup is bounded: worst case ≈ 5s (MySQL) + 3s (Redis) before binding, so
+  liveness probes and CI boots are deterministic.
+- Rate limiting and caching are both off when Redis is down; the existing
+  fail-open middleware path is unchanged and now actually reachable.
+- New public routes must still be added to the OpenAPI `ROUTES` table — the job
+  that enforces it (and would have caught this) runs again.
+- Follow-up: the CI `openapi` job's unreachable-DB config previously hid the
+  Redis hang only because the whole workflow never ran; keep it enabled.
+
+---
+
 ## Open Questions / Assumptions
 
 These mirror the open questions in [`docs/todo.md`](todo.md). Resolve

@@ -4,7 +4,7 @@ use playzoid_server::{
     config::Config,
     db,
     middleware::{metrics, rate_limit},
-    sockets,
+    services, sockets,
 };
 use tracing::info;
 use tracing_actix_web::TracingLogger;
@@ -42,19 +42,16 @@ async fn main() -> std::io::Result<()> {
     };
 
     // Build the Redis connection manager — caching disabled if unavailable.
-    let redis_mgr = match redis::Client::open(cfg.redis_url.as_str()) {
-        Ok(client) => match redis::aio::ConnectionManager::new(client).await {
-            Ok(mgr) => {
-                info!("Redis connection manager initialised");
-                Some(mgr)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to connect to Redis; caching disabled");
-                None
-            }
-        },
+    // `services::redis::connect` bounds the handshake; a bare
+    // `ConnectionManager::new` can retry forever against an unreachable server
+    // and stall startup before the server ever binds.
+    let redis_mgr = match services::redis::connect(&cfg.redis_url).await {
+        Ok(mgr) => {
+            info!("Redis connection manager initialised");
+            Some(mgr)
+        }
         Err(e) => {
-            tracing::warn!(error = %e, "Invalid Redis URL; caching disabled");
+            tracing::warn!(error = %e, "Redis unavailable; caching disabled");
             None
         }
     };
