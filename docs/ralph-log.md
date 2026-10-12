@@ -387,3 +387,24 @@ migrate) added; bypass actors trimmed 6 → 1 (Organization admin). Added
 and `TagProtect` (deletion + update on `refs/tags/v*`). Effect: "CI green" and
 the PR requirement from AGENTS.md are now machine-enforced, not convention.
 
+
+## 2026-10-12 19:20
+
+INCIDENT: `.env` tracked in a PUBLIC repo since a778497, containing a real
+JWT_SECRET. Present on main, release/v0.3, release/v0.4, all task/* branches and
+in tags v0.2.0/v0.3.0/v0.4.0/v0.4.1. GitHub secret scanning was disabled, so
+nothing alerted.
+
+Done: `git rm --cached .env` + .gitignore rules; enabled secret scanning and
+push protection on the repo; rotated the local dev JWT_SECRET to a fresh
+64-byte hex value; documented the incident in docs/memory.md; strengthened
+.env.example with per-environment generation guidance.
+
+Pending (needs go-ahead — rewrites public history): git filter-repo purge of
+`.env` + force-push all branches + re-create all four tags, requiring temporary
+relaxation of the new TagProtect ruleset. Rotation is the real remediation and
+is already done locally.
+
+Also done: local dev stack brought up (docker compose db+redis, migrations,
+release build) — healthz db=ok, register/login round-trip 201/200, /metrics
+live, rate limiting 429s after the auth budget.

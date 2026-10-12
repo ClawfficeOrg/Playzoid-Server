@@ -49,6 +49,28 @@ marker. No API or schema changes.
   unsatisfiable. Now runs on pushes to `main` and `release/**` and on pull
   requests targeting `main`. `workflow_dispatch` retained for manual re-runs.
 
+### Docs
+- Corrected the RC-tag rule in `docs/todo-v1.md`: it claimed *this* line
+  (`0.4`) has `Y = 0`, but the release line is `0.4`, so `Y = 4`. The rule
+  itself is unchanged and now matches `docs/todo-v0.md` and `AGENTS.md`.
+
+## [Unreleased] — 2026-10-12 — governance repairs + `.env` security incident
+
+Follow-ups on top of `v0.4.1`; not covered by that tag.
+
+### Security
+- **`.env` removed from tracking.** It was committed in `a778497` and had been
+  present in every branch and all four tags since, exposing a real `JWT_SECRET`
+  in a **public** repository. `git rm --cached .env` plus `.gitignore` rules
+  (`.env`, `.env.*`, `!.env.example`) prevent re-committing. The key must be
+  treated as compromised and rotated regardless — removal from history does not
+  un-leak a published value. `.env.example` now documents per-environment
+  generation (`openssl rand -hex 64`).
+- Enabled GitHub **secret scanning** and **push protection** on the repository
+  (secret scanning had been disabled, which is why this went unnoticed).
+- Follow-up: purge `.env` from history (`git filter-repo`) and force-push all
+  refs + re-create tags. Requires temporarily relaxing `TagProtect`.
+
 ### Repository governance
 - **`MainProtect` ruleset repaired.** It was named for `main` but matched
   `~ALL` (`ref_name.include: ["~ALL"]`) while carrying both the `update` and
@@ -64,11 +86,6 @@ marker. No API or schema changes.
   would otherwise have removed.
 - **New `TagProtect` ruleset** — `deletion` + `update` for `refs/tags/v*`, so
   release tags cannot be silently re-pointed or removed.
-
-### Docs
-- Corrected the RC-tag rule in `docs/todo-v1.md`: it claimed *this* line
-  (`0.4`) has `Y = 0`, but the release line is `0.4`, so `Y = 4`. The rule
-  itself is unchanged and now matches `docs/todo-v0.md` and `AGENTS.md`.
 
 
 ### Fixed
