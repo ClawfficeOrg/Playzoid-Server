@@ -27,8 +27,8 @@
   `task/vX.Y.Z` branch off it.
 - On line completion: review → merge to main → tag `vX.Y.0` → bump project
   version to exactly `X.Y.0`.
-- Lines where Y = 0 (e.g. this line) are major-adjacent and require an RC tag
-  + human sign-off before merge.
+- Lines where Y = 0 (e.g. `1.0`; note this v0.x line is `0.4`, so Y = 4 — not
+  major-adjacent) require an RC tag + human sign-off before merge.
 
 ---
 
